@@ -1,0 +1,11 @@
+# Keep host build artifacts and secrets out of the image build context —
+# dependencies are installed fresh from package-lock.json inside the build.
+**/node_modules
+**/dist
+.env
+.git
+.claude
+logs
+data
+server/data
+infrared

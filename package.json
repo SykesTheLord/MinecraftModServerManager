@@ -1,0 +1,25 @@
+{
+  "name": "minecraft-mod-server-manager",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build -w server && npm run build -w web",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true,
+    "cpu-features@0.0.10": true,
+    "esbuild@0.28.2": true,
+    "protobufjs@7.6.6": true,
+    "ssh2@1.17.0": true
+  }
+}

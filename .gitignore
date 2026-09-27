@@ -1,0 +1,185 @@
+# =============================================================================
+# Project
+# =============================================================================
+
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+*.log
+npm-debug.log*
+.npm/
+
+# Secrets / runtime state
+.env
+.env.*
+!.env.example
+data/
+server/data/
+server/public/
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Host-browsable logs (docker-compose bind mount) — keep only the placeholder
+logs/*
+!logs/.gitkeep
+
+# Infrared's config loader treats every file in this directory as a proxy
+# config and errors on anything else (even a .gitkeep) — never put a
+# placeholder file in here. Docker Compose auto-creates the empty directory.
+infrared/configs/
+
+# =============================================================================
+# Agentic coding tools
+# Rule of thumb: ignore each tool's personal/local state and caches, but keep
+# shared, team-wide instructions committable (CLAUDE.md, AGENTS.md, GEMINI.md,
+# .cursor/rules/, .clinerules, .windsurfrules, .roo/, .github/copilot-instructions.md, ...).
+# =============================================================================
+
+# Claude Code — commit .claude/settings.json, commands/, agents/, skills/; ignore personal state
+.claude/settings.local.json
+.claude/*.lock
+.claude/todos/
+.claude/worktrees/
+CLAUDE.local.md
+
+# Cursor — commit .cursor/rules/ and .cursorignore; the rest (incl. mcp.json, which may hold tokens) is local
+.cursor/*
+!.cursor/rules/
+
+# Aider — chat/input history and repo-map caches (a shared .aider.conf.yml stays committable)
+.aider.chat.history.md
+.aider.input.history
+.aider.llm.history
+.aider.tags.cache.v*/
+
+# Continue — commit rules/prompts; config can contain API keys
+.continue/*
+!.continue/rules/
+!.continue/prompts/
+
+# Gemini CLI — project-level secrets and scratch
+.gemini/.env
+.gemini/tmp/
+
+# OpenAI Codex CLI — local session state
+.codex/sessions/
+.codex/log/
+
+# Windsurf / Codeium — local caches
+.codeium/
+.windsurf/cache/
+
+# Cline / Roo Code — task history and checkpoints (rules in .clinerules / .roo/ stay committable)
+.cline/
+.roo/tasks/
+.roo/checkpoints/
+
+# Kiro — local MCP settings (specs/steering stay committable)
+.kiro/settings/mcp.json
+
+# OpenHands — local runtime state
+.openhands-state/
+
+# Generic AI scratch/cache dirs
+.ai-cache/
+.llm-cache/
+
+# =============================================================================
+# JetBrains IDEs (IntelliJ IDEA, WebStorm, PyCharm, GoLand, Rider, Fleet, ...)
+# =============================================================================
+
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.fleet/
+cmake-build-*/
+# HTTP Client private environment (holds credentials)
+http-client.private.env.json
+
+# =============================================================================
+# VS Code and its forks (Cursor, Windsurf, ...) — keep shareable recommendations
+# =============================================================================
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+*.code-workspace
+.history/
+
+# =============================================================================
+# Neovim / Vim
+# =============================================================================
+
+# Swap files
+[._]*.s[a-v][a-z]
+!*.svg
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+# Sessions, undo, netrw, logs, tags
+Session.vim
+Sessionx.vim
+*.un~
+.netrwhist
+.nvimlog
+tags
+tags.lock
+tags.temp
+
+# =============================================================================
+# Linux
+# =============================================================================
+
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# Windows
+# =============================================================================
+
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.stackdump
+*.lnk
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
+# =============================================================================
+# macOS
+# =============================================================================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
