@@ -32,6 +32,64 @@ logs/*
 # placeholder file in here. Docker Compose auto-creates the empty directory.
 infrared/configs/
 
+# Per-machine Docker Compose overrides (e.g. a different port bind, extra
+# mounts while debugging) — the shared definition is docker-compose.yml.
+docker-compose.override.yml
+docker-compose.override.yaml
+compose.override.yml
+compose.override.yaml
+
+# TLS material, e.g. for a reverse proxy in front of the manager (see TRUST_PROXY)
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+certs/
+
+# =============================================================================
+# Node / package managers / build tooling
+# =============================================================================
+
+# Other package managers' state (this repo uses npm + package-lock.json)
+.pnpm-store/
+.yarn/*
+!.yarn/releases/
+.pnp.*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.tgz
+
+# Tool caches
+.cache/
+.vite/
+vite.config.*.timestamp-*
+.eslintcache
+.stylelintcache
+.turbo/
+.parcel-cache/
+.node_repl_history
+
+# Testing (no suite yet — planned in docs/TODO.md)
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+*.lcov
+junit.xml
+
+# Runtime diagnostics
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+*.heapsnapshot
+*.cpuprofile
+pids/
+*.pid
+*.pid.lock
+*.seed
+
 # =============================================================================
 # Agentic coding tools
 # Rule of thumb: ignore each tool's personal/local state and caches, but keep
@@ -134,6 +192,37 @@ Sessionx.vim
 tags
 tags.lock
 tags.temp
+
+# =============================================================================
+# Other editors
+# =============================================================================
+
+# Emacs
+\#*\#
+.\#*
+*.elc
+auto-save-list/
+.projectile
+.dir-locals-2.el
+# Sublime Text (a shared *.sublime-project stays committable)
+*.sublime-workspace
+# Zed — local tasks/debug state (shared .zed/settings.json stays committable)
+.zed/debug.json
+
+# =============================================================================
+# Shell / environment tooling
+# =============================================================================
+
+# direnv — the cache dir and personal overrides (a shared .envrc stays committable)
+.direnv/
+.envrc.local
+
+# Leftovers from merges, patches and quick edits
+*.orig
+*.rej
+*.bak
+*.tmp
+*.temp
 
 # =============================================================================
 # Linux

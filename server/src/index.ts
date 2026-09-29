@@ -9,6 +9,7 @@ import { createApp, sessionMiddleware } from "./app.js";
 import { attachConsoleGateway } from "./ws/consoleGateway.js";
 import { ensurePlaceholderRoute } from "./infrared/configWriter.js";
 import { loadInstanceNetworkBlocklist } from "./http/security.js";
+import { clearImportStaging, startAbandonedImportSweep } from "./imports/importJobs.js";
 
 // Last line of defense: every known async path already handles its own
 // errors, but one missed rejection shouldn't take down the manager (and log
@@ -20,6 +21,8 @@ process.on("unhandledRejection", (err) => {
 async function main() {
   seedSuperadminIfNeeded();
   ensurePlaceholderRoute();
+  clearImportStaging();
+  startAbandonedImportSweep();
   await ensureNetworkExists();
   await loadInstanceNetworkBlocklist();
 

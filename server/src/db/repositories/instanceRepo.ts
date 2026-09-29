@@ -8,6 +8,8 @@ export type InstanceStatus =
   | "error"
   | "deleting";
 
+export type InstanceSource = "ftb" | "import";
+
 export interface InstanceRow {
   id: string;
   name: string;
@@ -17,6 +19,9 @@ export interface InstanceRow {
   ftb_pack_name: string;
   memory_mb: number;
   image: string;
+  source: InstanceSource;
+  /** JSON object of itzg env (TYPE, VERSION, ...) — only for source = 'import'. */
+  server_env: string | null;
   container_id: string | null;
   container_name: string;
   volume_name: string;
@@ -58,19 +63,26 @@ export const instanceRepo = {
     containerName: string;
     volumeName: string;
     rconPassword: string;
+    source?: InstanceSource;
+    serverEnv?: Record<string, string>;
   }): void {
     const now = new Date().toISOString();
     db.prepare(
       `INSERT INTO instance (
          id, name, subdomain, ftb_modpack_id, ftb_version_id, ftb_pack_name,
-         memory_mb, image, container_id, container_name, volume_name, rcon_password,
+         memory_mb, image, source, server_env, container_id, container_name, volume_name, rcon_password,
          status, last_error, created_at, updated_at
        ) VALUES (
          @id, @name, @subdomain, @ftbModpackId, @ftbVersionId, @ftbPackName,
-         @memoryMb, @image, NULL, @containerName, @volumeName, @rconPassword,
+         @memoryMb, @image, @source, @serverEnv, NULL, @containerName, @volumeName, @rconPassword,
          'creating', NULL, @now, @now
        )`
-    ).run({ ...instance, now });
+    ).run({
+      ...instance,
+      source: instance.source ?? "ftb",
+      serverEnv: instance.serverEnv ? JSON.stringify(instance.serverEnv) : null,
+      now,
+    });
   },
 
   updateStatus(id: string, status: InstanceStatus, lastError: string | null = null): void {

@@ -1,24 +1,7 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Web-app-specific rules only. Everything general (node_modules, dist, logs,
+# editor/IDE, OS, agent tooling) is covered by the repo-root .gitignore —
+# don't duplicate it here, or nested rules start overriding the root ones.
 
-node_modules
-dist
-dist-ssr
+# Vite: SSR build output and local-only env/config overrides (*.local)
+dist-ssr/
 *.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?

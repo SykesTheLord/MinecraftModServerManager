@@ -69,7 +69,7 @@ export function InstanceDetailPage() {
 
       <section className="card">
         <p>
-          <strong>Modpack:</strong> {instance.ftb_pack_name}
+          <strong>{instance.source === "import" ? "Server:" : "Modpack:"}</strong> {instance.ftb_pack_name}
         </p>
         <p>
           <strong>Subdomain:</strong>{" "}

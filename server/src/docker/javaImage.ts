@@ -14,7 +14,8 @@ import { env } from "../config/env.js";
  * Java target (FTB's API exposes this — see ftbCatalogClient.getModpackJavaMajorVersion)
  * instead of always using one fixed tag for every modpack.
  */
-const KNOWN_JAVA_TAGS = new Set([8, 11, 16, 17, 21, 25]);
+export const KNOWN_JAVA_VERSIONS = [8, 11, 16, 17, 21, 25] as const;
+const KNOWN_JAVA_TAGS = new Set<number>(KNOWN_JAVA_VERSIONS);
 
 /** MC_IMAGE without its tag, keeping any registry prefix (including one with a :port). */
 function imageRepository(image: string): string {
@@ -32,4 +33,22 @@ export function resolveMinecraftImage(javaMajor: number | null): string {
   // which itzg's docs say always carries the newest Java a current Minecraft
   // release needs — the safer default for packs we can't classify.
   return env.MC_IMAGE;
+}
+
+/**
+ * The Java major a Minecraft version needs, for servers that don't come with
+ * a declared Java target (imported ones — FTB packs declare their own).
+ * Mojang's minimums: 1.17 → 16 (17 runs it too, and is the better-supported
+ * tag), 1.18 → 17, 1.20.5 → 21; year-based versions (26.1+) → 25. Everything up to 1.16 gets 8 rather than "anything ≥ 8":
+ * Forge on those versions crash-loops on newer JVMs (see above).
+ */
+export function javaMajorForMinecraftVersion(version: string | null | undefined): number | null {
+  const match = version?.match(/^(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!match) return null;
+  const [major, minor, patch] = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
+  if (major >= 26) return 25;
+  if (major !== 1) return null;
+  if (minor <= 16) return 8;
+  if (minor < 20 || (minor === 20 && patch < 5)) return 17;
+  return 21;
 }

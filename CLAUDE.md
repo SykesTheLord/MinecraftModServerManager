@@ -111,6 +111,23 @@ watches Docker's own `RestartCount` field instead and gives up (stops the
 container, marks the instance `error` with the real log tail) once it
 crosses a small threshold.
 
+### Importing natively run servers
+
+`imports/` + `routes/imports.routes.ts` (superadmin-only) bring an existing
+server directory over — by chunked browser upload of a `.tar[.gz]`/`.zip`,
+or by an SSH pull (`sshSource.ts`: remote `tar -cz` streamed into
+extraction, host key pinned to a fingerprint the admin confirmed). Files are
+staged in `DATA_DIR/imports/<jobId>` (in-memory job registry, wiped on
+boot), analyzed (`analyze.ts` detects Forge/NeoForge/Fabric/Quilt/Paper/
+vanilla/custom jar, MC + loader version, `-Xmx`, `level-name`), reviewed in
+the UI, then deployed by `instanceService.createImportedInstance`, which
+`putArchive`s them into the new volume (as uid 1000) before first start.
+Imported rows have `source = 'import'` and their itzg env (`TYPE`,
+`VERSION`, `FORGE_VERSION`, …) as JSON in `server_env`; `buildContainerConfig`
+branches on that instead of emitting `TYPE=FTBA`. Extraction only writes
+regular files/dirs inside the staging dir (no links) — keep it that way;
+the archive comes from another machine. See `docs/ARCHITECTURE.md`.
+
 ### Modpack source: FTB's own catalog, not CurseForge
 
 `ftb/ftbCatalogClient.ts` talks to `api.modpacks.ch/public/...`, the same
@@ -148,7 +165,8 @@ version's actual config format, not assumed.
 - `instance_access` — per-(user, instance) grants of `admin` or `operator`.
   Superadmins don't need rows here; they implicitly pass every check.
 - `instance` — one row per deployed modpack: FTB pack/version ids, resolved
-  `image`, `container_id`/`container_name`/`volume_name`, per-instance
+  `image`, `source` (`ftb`|`import`) + `server_env` (imports only),
+  `container_id`/`container_name`/`volume_name`, per-instance
   `rcon_password`, and `status` (`creating|installing|running|stopped|error|deleting`).
   Docker is the actual source of truth for runtime state — `instances/reconcile.ts`
   reconciles DB status against real container state on manager boot.
@@ -160,7 +178,7 @@ Enforced server-side per request, not just hidden in the UI —
 `global_role === 'superadmin'` or a matching `instance_access` row before
 allowing any instance-scoped action. `operator` covers start/stop/restart/
 console; `admin` (per-instance) additionally covers delete/subdomain-edit.
-Only a superadmin can create instances or manage users at all. The frontend
+Only a superadmin can create or import instances or manage users at all. The frontend
 receives the caller's `effectiveRole` per instance in list/get responses
 (`routes/instances.routes.ts`) so the UI can gate actions without guessing.
 

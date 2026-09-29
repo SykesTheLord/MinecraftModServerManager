@@ -17,7 +17,16 @@ export function DashboardPage() {
     <Layout>
       <div className="page-header">
         <h1>Modpack Servers</h1>
-        {user?.globalRole === "superadmin" && <Link to="/instances/new" className="button-link">+ New Instance</Link>}
+        {user?.globalRole === "superadmin" && (
+          <div className="page-header-actions">
+            <Link to="/instances/import" className="button-link secondary">
+              Import Server
+            </Link>
+            <Link to="/instances/new" className="button-link">
+              + New Instance
+            </Link>
+          </div>
+        )}
       </div>
 
       {isLoading && <p>Loading...</p>}

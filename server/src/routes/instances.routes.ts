@@ -10,7 +10,7 @@ import { routeParam } from "../http/errors.js";
 export const instancesRouter = Router();
 instancesRouter.use(requireAuth);
 
-function serialize(instance: InstanceRow, requester: UserRow) {
+export function serializeInstance(instance: InstanceRow, requester: UserRow) {
   const { rcon_password: _rconPassword, ...safe } = instance;
   return { ...safe, effectiveRole: effectiveInstanceRole(requester, instance.id) };
 }
@@ -18,11 +18,11 @@ function serialize(instance: InstanceRow, requester: UserRow) {
 instancesRouter.get("/", (req, res) => {
   const all = instanceRepo.list();
   if (req.user!.global_role === "superadmin") {
-    res.json(all.map((i) => serialize(i, req.user!)));
+    res.json(all.map((i) => serializeInstance(i, req.user!)));
     return;
   }
   const allowed = new Set(accessibleInstanceIds(req.user!));
-  res.json(all.filter((i) => allowed.has(i.id)).map((i) => serialize(i, req.user!)));
+  res.json(all.filter((i) => allowed.has(i.id)).map((i) => serializeInstance(i, req.user!)));
 });
 
 instancesRouter.get("/:id", requireInstanceRole("operator"), (req, res) => {
@@ -31,7 +31,7 @@ instancesRouter.get("/:id", requireInstanceRole("operator"), (req, res) => {
     res.status(404).json({ error: "Instance not found." });
     return;
   }
-  res.json(serialize(instance, req.user!));
+  res.json(serializeInstance(instance, req.user!));
 });
 
 const createInstanceSchema = z.object({
@@ -53,7 +53,7 @@ instancesRouter.post(
       return;
     }
     const instance = await instanceService.createInstance(parsed.data);
-    res.status(201).json(serialize(instance, req.user!));
+    res.status(201).json(serializeInstance(instance, req.user!));
   }
 );
 
@@ -96,7 +96,7 @@ instancesRouter.patch(
       return;
     }
     await instanceService.updateSubdomain(routeParam(req, "id"), parsed.data.subdomain);
-    res.json(serialize(instanceRepo.findById(routeParam(req, "id"))!, req.user!));
+    res.json(serializeInstance(instanceRepo.findById(routeParam(req, "id"))!, req.user!));
   }
 );
 

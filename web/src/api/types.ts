@@ -9,6 +9,7 @@ export interface Instance {
   ftb_pack_name: string;
   memory_mb: number;
   image: string;
+  source: "ftb" | "import";
   container_id: string | null;
   container_name: string;
   volume_name: string;
@@ -43,4 +44,34 @@ export interface ModpackSummary {
 export interface ModpackVersionSummary {
   id: number;
   name: string;
+}
+
+export type ServerType = "FORGE" | "NEOFORGE" | "FABRIC" | "QUILT" | "PAPER" | "VANILLA" | "CUSTOM";
+
+export interface ImportAnalysis {
+  serverType: ServerType;
+  minecraftVersion: string | null;
+  loaderVersion: string | null;
+  customJar: string | null;
+  javaVersion: number | null;
+  javaVersions: number[];
+  memoryMb: number | null;
+  levelName: string;
+  worldFound: boolean;
+  motd: string | null;
+  jars: string[];
+  modCount: number;
+  totalBytes: number;
+  warnings: string[];
+}
+
+export interface ImportJob {
+  id: string;
+  source: "upload" | "ssh";
+  label: string;
+  state: "receiving" | "processing" | "ready" | "deploying" | "failed";
+  receivedBytes: number;
+  expectedBytes: number | null;
+  error: string | null;
+  analysis: ImportAnalysis | null;
 }

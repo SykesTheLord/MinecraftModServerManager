@@ -68,6 +68,63 @@ e.g. a 1.7.10 Forge pack crash-looped with a `ClassCastException` from
 legacy Forge's launch wrapper against a modern JDK. See "Crash-loop
 detection" below for how this is surfaced instead of hanging forever.
 
+## Importing natively run servers
+
+Besides FTB packs, an existing server directory can be imported
+(`server/src/imports/`, `routes/imports.routes.ts`, UI `ImportServerPage`).
+It's the same "one base image, parameterized per instance" model, with the
+files supplied instead of downloaded:
+
+1. **Staging.** Files land in `DATA_DIR/imports/<jobId>/files` via either a
+   chunked browser upload (`.tar[.gz]`/`.zip`, extracted server-side — Node
+   kills requests that take over 5 minutes to *arrive*, so one big upload
+   request would fail for large servers) or an SSH pull, where the manager
+   runs `tar -cz` on the source machine and extracts the stream as it
+   arrives (far faster than per-file SFTP for a modpack's many small
+   files). Import jobs are in-memory, like sessions; staging is wiped on boot.
+2. **Analysis** (`analyze.ts`) finds the server root inside wrapper
+   directories and reads the platform from its install layout —
+   `libraries/net/minecraftforge/forge/<mc>-<ver>`,
+   `libraries/net/neoforged/…`, Fabric/Quilt loader libraries or launcher
+   jar names, `paper-<mc>-<build>.jar`, `version.json` inside a vanilla
+   `server.jar` — plus `-Xmx` and `level-name`.
+3. **Deploy** (`instanceService.createImportedInstance`) creates the volume
+   and container, copies the files in with Docker's `putArchive` *before the
+   first start* (tar entries rewritten to uid/gid 1000, itzg's `minecraft`
+   user — its entrypoint only re-chowns when `/data` itself has the wrong
+   owner, which a fresh volume's doesn't), then starts it. The row has
+   `source = 'import'` and its itzg env (`TYPE=FORGE`, `VERSION`,
+   `FORGE_VERSION`, `LEVEL`, …; names checked against the image's
+   `start-deploy*` scripts) in `server_env`; `ftb_*` ids are 0 and
+   `ftb_pack_name` holds a display label.
+
+itzg reinstalls the declared loader version next to the copied files rather
+than running the old start scripts — that gives a known-good launch command
+regardless of how the old box launched it. Java comes from the Minecraft
+version (`javaImage.ts#javaMajorForMinecraftVersion`, ≤1.16 → 8) unless
+overridden.
+
+Security properties (import data comes from another machine):
+- Extraction writes only regular files and directories; symlinks/hardlinks
+  are dropped and every entry path is checked to stay inside the staging dir
+  (yauzl additionally rejects zips with `..`/absolute names outright).
+  Total extracted size is capped (`IMPORT_MAX_BYTES`).
+- SSH host keys are pinned: the admin fetches the fingerprint
+  (unauthenticated probe), verifies it out of band, and the pull refuses any
+  other key — otherwise a MITM could harvest the credentials and substitute
+  the files. Credentials are never persisted or logged. Remote paths are
+  shell-quoted; exclude names and versions are allowlisted by regex.
+- Everything is superadmin-only (it runs arbitrary server code, and the SSH
+  source makes the manager open outbound connections wherever it's told).
+
+Verified live: a real Fabric 1.20.1 server (Fabric API, custom
+`level-name`, non-default port, `-Xmx6G` start script) imported both by
+upload and by SSH pull (password and passphrase-protected ed25519 key, with
+and without sudo, from an Ubuntu 24.04 sshd whose files were owned by a
+separate service user); both booted to `running` with the original world
+(same seed) on `java17`, port rewritten to 25565, `logs/`/`backups/`
+excluded.
+
 ## Modpack source: FTB's own catalog, not CurseForge
 
 `server/src/ftb/ftbCatalogClient.ts` calls `api.modpacks.ch/public/...` — the

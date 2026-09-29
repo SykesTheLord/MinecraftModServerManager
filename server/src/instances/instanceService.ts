@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
+import type Docker from "dockerode";
 import { docker } from "../docker/dockerClient.js";
 import { buildContainerConfig, STOP_TIMEOUT_SECONDS } from "../docker/containerSpec.js";
 import { ensureImagePulled } from "../docker/images.js";
-import { resolveMinecraftImage } from "../docker/javaImage.js";
+import { javaMajorForMinecraftVersion, resolveMinecraftImage } from "../docker/javaImage.js";
 import { instanceRepo, type InstanceRow } from "../db/repositories/instanceRepo.js";
 import { writeInstanceRoute, removeInstanceRoute } from "../infrared/configWriter.js";
 import { startPersistingInstanceLogs, stopPersistingInstanceLogs } from "../logging/instanceLogWriter.js";
@@ -11,6 +12,9 @@ import { appLogger } from "../logging/appLogger.js";
 import { getRecentLogs } from "../docker/logsStream.js";
 import { getModpackJavaMajorVersion } from "../ftb/ftbCatalogClient.js";
 import { HttpError } from "../http/errors.js";
+import { prepareServerProperties, type ImportAnalysis } from "../imports/analyze.js";
+import { packForContainer } from "../imports/archive.js";
+import { buildImportedServerEnv, importedServerLabel, type ImportedServerSettings } from "../imports/serverEnv.js";
 
 export interface CreateInstanceInput {
   name: string;
@@ -19,6 +23,14 @@ export interface CreateInstanceInput {
   ftbVersionId: number;
   ftbPackName: string;
   memoryMb: number;
+}
+
+export interface CreateImportedInstanceInput extends Omit<ImportedServerSettings, "levelName"> {
+  name: string;
+  subdomain: string;
+  memoryMb: number;
+  /** Java major for the image tag; null picks one from the Minecraft version. */
+  javaVersion: number | null;
 }
 
 const SUBDOMAIN_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -32,12 +44,48 @@ export function validateSubdomain(subdomain: string): void {
   }
 }
 
+function assertSubdomainAvailable(subdomain: string): void {
+  validateSubdomain(subdomain);
+  if (instanceRepo.findBySubdomain(subdomain)) {
+    throw new HttpError(409, `Subdomain "${subdomain}" is already in use.`);
+  }
+}
+
+/**
+ * Brings a freshly inserted `creating` row up: pulls its image, creates its
+ * volume and container, runs `beforeStart` (e.g. copying files into the
+ * volume), then starts it and wires up routing, logs and health polling.
+ */
+async function provisionInstance(id: string, beforeStart?: (container: Docker.Container) => Promise<void>): Promise<InstanceRow> {
+  const instance = instanceRepo.findById(id)!;
+  try {
+    await ensureImagePulled(instance.image);
+    await docker.createVolume({ Name: instance.volume_name });
+
+    const container = await docker.createContainer(buildContainerConfig(instance));
+    instanceRepo.setContainerId(id, container.id);
+    await beforeStart?.(container);
+    await container.start();
+
+    instanceRepo.updateStatus(id, "installing");
+    writeInstanceRoute(id, instance.subdomain, instance.container_name);
+    startPersistingInstanceLogs(id, container.id);
+    startHealthPolling(id);
+
+    return instanceRepo.findById(id)!;
+  } catch (err) {
+    appLogger.error({ err, instanceId: id }, "failed to create instance");
+    const message = err instanceof Error ? err.message : String(err);
+    instanceRepo.updateStatus(id, "error", message);
+    // Superadmin-only path, and the Docker/pull error is exactly what the
+    // admin needs to see — surfaced deliberately rather than as a bare 500.
+    throw new HttpError(502, `Failed to create instance: ${message}`);
+  }
+}
+
 export const instanceService = {
   async createInstance(input: CreateInstanceInput): Promise<InstanceRow> {
-    validateSubdomain(input.subdomain);
-    if (instanceRepo.findBySubdomain(input.subdomain)) {
-      throw new HttpError(409, `Subdomain "${input.subdomain}" is already in use.`);
-    }
+    assertSubdomainAvailable(input.subdomain);
 
     const id = crypto.randomUUID();
     const containerName = `mc-${id}`;
@@ -61,29 +109,43 @@ export const instanceService = {
       rconPassword,
     });
 
-    try {
-      await ensureImagePulled(image);
-      await docker.createVolume({ Name: volumeName });
+    return provisionInstance(id);
+  },
 
-      const instance = instanceRepo.findById(id)!;
-      const container = await docker.createContainer(buildContainerConfig(instance));
-      instanceRepo.setContainerId(id, container.id);
-      await container.start();
+  /**
+   * Creates an instance from an existing server's files (staged by
+   * imports/importJobs.ts). Same as createInstance, except the container runs
+   * the detected/chosen platform instead of an FTB pack, and the files are
+   * copied into its volume before its first start — so itzg finds the mods,
+   * configs and world already in place and only (re)installs the loader.
+   */
+  async createImportedInstance(input: CreateImportedInstanceInput, serverDir: string, analysis: ImportAnalysis): Promise<InstanceRow> {
+    assertSubdomainAvailable(input.subdomain);
+    const settings = { ...input, levelName: analysis.levelName };
+    const serverEnv = buildImportedServerEnv(settings, analysis.jars);
+    const image = resolveMinecraftImage(input.javaVersion ?? javaMajorForMinecraftVersion(input.minecraftVersion));
 
-      instanceRepo.updateStatus(id, "installing");
-      writeInstanceRoute(id, input.subdomain, containerName);
-      startPersistingInstanceLogs(id, container.id);
-      startHealthPolling(id);
+    const id = crypto.randomUUID();
+    instanceRepo.create({
+      id,
+      name: input.name,
+      subdomain: input.subdomain,
+      ftbModpackId: 0,
+      ftbVersionId: 0,
+      ftbPackName: importedServerLabel(settings),
+      memoryMb: input.memoryMb,
+      image,
+      containerName: `mc-${id}`,
+      volumeName: `mc-data-${id}`,
+      rconPassword: crypto.randomBytes(16).toString("hex"),
+      source: "import",
+      serverEnv,
+    });
 
-      return instanceRepo.findById(id)!;
-    } catch (err) {
-      appLogger.error({ err, instanceId: id }, "failed to create instance");
-      const message = err instanceof Error ? err.message : String(err);
-      instanceRepo.updateStatus(id, "error", message);
-      // Superadmin-only path, and the Docker/pull error is exactly what the
-      // admin needs to see — surfaced deliberately rather than as a bare 500.
-      throw new HttpError(502, `Failed to create instance: ${message}`);
-    }
+    return provisionInstance(id, async (container) => {
+      prepareServerProperties(serverDir);
+      await container.putArchive(packForContainer(serverDir), { path: "/data" });
+    });
   },
 
   async startInstance(id: string): Promise<void> {

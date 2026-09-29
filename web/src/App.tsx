@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { NewInstanceWizard } from "./pages/NewInstanceWizard";
+import { ImportServerPage } from "./pages/ImportServerPage";
 import { InstanceDetailPage } from "./pages/InstanceDetailPage";
 import { UsersPage } from "./pages/UsersPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -26,6 +27,16 @@ export function App() {
             <RequireAuth>
               <RequireSuperadmin>
                 <NewInstanceWizard />
+              </RequireSuperadmin>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/instances/import"
+          element={
+            <RequireAuth>
+              <RequireSuperadmin>
+                <ImportServerPage />
               </RequireSuperadmin>
             </RequireAuth>
           }

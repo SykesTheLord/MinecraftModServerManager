@@ -42,13 +42,26 @@ export function containerMemoryLimitBytes(heapMb: number): number {
  * Getting this wrong is not hypothetical: it's exactly what crash-looped two
  * different real FTB packs during implementation.
  *
+ * Imported instances (source = 'import', see imports/) instead run whatever
+ * server files were copied into their volume, with the itzg TYPE/VERSION env
+ * resolved at import time and stored in `server_env`.
+ *
  * Deliberately no PortBindings: instances are only reachable from Infrared
  * over the internal mc-net network, never published to the host directly.
  */
 export function buildContainerConfig(
   instance: Pick<
     InstanceRow,
-    "id" | "ftb_modpack_id" | "ftb_version_id" | "memory_mb" | "image" | "container_name" | "volume_name" | "rcon_password"
+    | "id"
+    | "ftb_modpack_id"
+    | "ftb_version_id"
+    | "memory_mb"
+    | "image"
+    | "source"
+    | "server_env"
+    | "container_name"
+    | "volume_name"
+    | "rcon_password"
   >
 ): Docker.ContainerCreateOptions {
   return {
@@ -56,9 +69,7 @@ export function buildContainerConfig(
     Image: instance.image,
     Env: [
       "EULA=TRUE",
-      "TYPE=FTBA",
-      `FTB_MODPACK_ID=${instance.ftb_modpack_id}`,
-      `FTB_MODPACK_VERSION_ID=${instance.ftb_version_id}`,
+      ...serverTypeEnv(instance),
       `MEMORY=${instance.memory_mb}M`,
       "ENABLE_RCON=TRUE",
       `RCON_PASSWORD=${instance.rcon_password}`,
@@ -87,4 +98,18 @@ export function buildContainerConfig(
       // No PortBindings — only Infrared is reachable from outside mc-net.
     },
   };
+}
+
+function serverTypeEnv(
+  instance: Pick<InstanceRow, "ftb_modpack_id" | "ftb_version_id" | "source" | "server_env">
+): string[] {
+  if (instance.source === "import") {
+    const serverEnv = JSON.parse(instance.server_env ?? "{}") as Record<string, string>;
+    return Object.entries(serverEnv).map(([key, value]) => `${key}=${value}`);
+  }
+  return [
+    "TYPE=FTBA",
+    `FTB_MODPACK_ID=${instance.ftb_modpack_id}`,
+    `FTB_MODPACK_VERSION_ID=${instance.ftb_version_id}`,
+  ];
 }

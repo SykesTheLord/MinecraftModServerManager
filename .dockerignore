@@ -1,11 +1,82 @@
-# Keep host build artifacts and secrets out of the image build context —
-# dependencies are installed fresh from package-lock.json inside the build.
+# Keep host build artifacts, secrets and local clutter out of the image build
+# context — dependencies are installed fresh from package-lock.json inside the
+# build, and only server/, web/ and the root package files are actually used.
+
+# Dependencies / build output
 **/node_modules
 **/dist
+**/dist-ssr
+**/*.tsbuildinfo
+**/.vite
+**/.cache
+**/coverage
+
+# Secrets and runtime state
 .env
-.git
-.claude
-logs
+.env.*
+!.env.example
+**/*.pem
+**/*.key
+**/*.crt
+**/*.p12
+**/*.pfx
+certs
 data
 server/data
+logs
 infrared
+**/*.sqlite
+**/*.sqlite3*
+
+# VCS, CI and docs
+.git
+.gitignore
+.github
+docs
+*.md
+
+# Agentic coding tools
+.claude
+CLAUDE.local.md
+.cursor
+.aider*
+.continue
+.gemini
+.codex
+.codeium
+.windsurf
+.cline
+.roo
+.kiro
+.openhands-state
+
+# Editors / IDEs
+.idea
+**/*.iml
+.fleet
+.vscode
+*.code-workspace
+.history
+.zed
+**/*.sublime-workspace
+**/*.sw[a-p]
+**/*~
+**/\#*\#
+
+# OS clutter
+**/.DS_Store
+**/._*
+**/Thumbs.db
+**/[Dd]esktop.ini
+
+# Local compose overrides / scripts not needed in the image
+docker-compose*.yml
+compose*.yml
+docker-compose.override.yaml
+compose.override.yaml
+scripts
+
+# Test output
+**/test-results
+**/playwright-report
+**/.nyc_output

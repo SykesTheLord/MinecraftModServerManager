@@ -56,6 +56,8 @@ land, add new ones as they're found. Don't let it go stale.
   - `/api/docker/ping` unauthenticated; 500s leaked internal messages; WS maxPayload 100 MiB → fixed.
   - Production boot refuses a published/short `SESSION_SECRET`.
 
+- [x] Import natively run servers (Import Server page): chunked archive upload or SSH pull from another machine (host-key pinning, password/key auth, optional sudo), platform/version/heap/world detection, review, deploy via `putArchive` into a new volume; `scripts/export-native-server.sh` for the upload path. Verified live — see "Importing natively run servers" in `docs/ARCHITECTURE.md` (real Fabric server imported both ways, booted with its original world; malicious tar/zip entries — `..`, absolute, symlink, hardlink — confirmed contained; every platform's detection checked against its install layout; full UI flow driven in headless Chromium under the CSP).
+
 ## Verified but worth re-checking periodically
 
 - [ ] FTB's `api.modpacks.ch` endpoint shapes (unofficial, community-documented — could change without notice).
@@ -75,6 +77,8 @@ land, add new ones as they're found. Don't let it go stale.
 - [ ] The deployment's `.env` still seeds `admin`/`change-me-immediately` (deliberately kept on this test stack). Before any real deployment: change it in the UI, and consider making first boot refuse/randomize a default `ADMIN_PASSWORD`.
 - [ ] Existing instance containers keep their old config (no memory/pids limits, caps, or StopTimeout) until deleted and recreated.
 - [ ] Node 26 becomes LTS on 2026-10-28 — move to it (Dockerfile `NODE_IMAGE`, `engines`, `@types/node`) once it does.
+- [ ] Import: only the Fabric path was booted end-to-end; Forge/NeoForge/Quilt/Paper/vanilla/custom-jar detection was checked against synthetic install layouts and the itzg env names against the image's scripts, but not booted from a real imported server of each kind. Worth doing for at least one modern Forge (1.20.1) and one legacy Forge (1.12.2) server.
+- [ ] Import: no SFTP-only / Windows source support (needs `tar` + a POSIX shell on the source machine; upload an archive instead). Staged imports don't survive a manager restart.
 - [ ] Automated tests — none written yet; everything above was verified by hand against a live Docker daemon in this session, not by an automated test suite.
 
 ## Verification log (this session, against a real Docker daemon)

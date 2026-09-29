@@ -70,6 +70,59 @@ what went wrong (most commonly: this specific pack's Java target isn't one
 of the known image tags, or the pack itself has a broken FTB server-file
 entry).
 
+## Importing an existing server
+
+Dashboard → **Import Server** brings over a Minecraft server that has been
+running natively — typically a Forge/NeoForge/Fabric/Quilt/Paper/vanilla
+server run with `java -jar` or a `run.sh` on an Ubuntu box. Its mods,
+configs, world, whitelist/ops etc. are copied into a new instance's volume;
+from then on it's a normal instance (subdomain routing, console, access
+grants, start/stop).
+
+**Stop the server on the old machine first.** Copying a running server can
+capture its world mid-save.
+
+Two ways to get the files over:
+
+- **Copy from another machine (SSH)** — the manager connects to the old
+  machine and streams the server directory with `tar` (no setup needed on
+  that machine beyond a running `sshd`, which Ubuntu servers have).
+  1. Enter its host/port and click **Check host key**. Compare the
+     fingerprint shown against the one printed by running the displayed
+     `ssh-keygen -lf …` command *on the old machine itself*, and only tick
+     "matches" if they're identical — the transfer refuses any other key.
+  2. Log in with a password or a private key, and give the server's absolute
+     directory (e.g. `/opt/minecraft/server`).
+  3. If the files belong to a separate service account (e.g. `minecraft`),
+     tick **Read the files with sudo** — that needs passwordless sudo for
+     `tar` for the SSH user, e.g. a sudoers line
+     `youruser ALL=(ALL) NOPASSWD: /usr/bin/tar`.
+  Credentials are held in memory only for the transfer and never stored.
+  The manager container needs to be able to reach the old machine's SSH port.
+- **Upload an archive** — a `.tar.gz`, `.tar` or `.zip` of the server
+  directory, uploaded from your browser (in chunks, so multi-GB servers are
+  fine). On the old machine, `scripts/export-native-server.sh
+  /opt/minecraft/server` makes one (it skips logs/backups and refuses to run
+  while the server is still running); or just
+  `tar -czf server.tar.gz -C /opt/minecraft/server .`.
+
+`logs/` and `crash-reports/` are always dropped; `backups/` is skipped by
+default. The manager then detects the platform, Minecraft and loader
+versions, the heap size (`-Xmx` from the start script or
+`user_jvm_args.txt`) and the world folder (`level-name`), and shows them for
+review — correct anything it got wrong (unrecognized servers can run a jar
+of your choice as a "Custom jar"). On **Deploy**, the container installs that
+loader version itself on first boot (the old start scripts aren't used),
+picks a Java version from the Minecraft version unless you override it, and
+`server-port`/`server-ip` in `server.properties` are reset so the server is
+reachable through the shared port 25565. Everything else in
+`server.properties` is kept.
+
+Imports that are never deployed are discarded after 24 hours (and on manager
+restart). The largest importable server is 64 GiB by default
+(`IMPORT_MAX_BYTES` in `.env`); staged files live in the manager's data
+volume until deployed, so it needs that much free space temporarily.
+
 ## Managing access
 
 Only a **superadmin** can create/delete instances, manage users, and grant
@@ -113,3 +166,4 @@ or similar, even after the instance no longer shows up in the UI.
   auth/VPN/TLS layer in front.
 - Sessions are in-memory: restarting the manager container logs everyone out.
 - FTB's catalog API is unofficial/community-documented and could change.
+- An import in progress is lost if the manager restarts (start it again).

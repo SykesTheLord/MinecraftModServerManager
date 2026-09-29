@@ -12,6 +12,12 @@ const envSchema = z.object({
   DOCKER_NETWORK: z.string().min(1).default("mc-net"),
   MC_IMAGE: z.string().min(1).default("itzg/minecraft-server:stable"),
   /**
+   * Largest server (total extracted size) that can be imported. Imports are
+   * staged under DATA_DIR before being copied into their volume, so this
+   * mostly guards the disk against a runaway archive. Default 64 GiB.
+   */
+  IMPORT_MAX_BYTES: z.coerce.number().int().positive().default(64 * 1024 ** 3),
+  /**
    * Express "trust proxy" setting, only needed when the manager sits behind
    * a reverse proxy (e.g. for TLS). Leave unset otherwise: trusting
    * X-Forwarded-* headers from arbitrary clients would let them spoof their

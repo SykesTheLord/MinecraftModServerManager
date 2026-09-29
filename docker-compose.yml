@@ -20,6 +20,7 @@ services:
       INFRARED_CONFIG_DIR: /app/infrared-configs
       DOCKER_NETWORK: mc-net
       MC_IMAGE: ${MC_IMAGE:-itzg/minecraft-server:stable}
+      IMPORT_MAX_BYTES: ${IMPORT_MAX_BYTES:-68719476736}
       TRUST_PROXY: ${TRUST_PROXY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
