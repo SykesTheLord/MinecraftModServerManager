@@ -121,3 +121,7 @@ TLS/VPN, and use a strong admin password. Modpacks are treated as untrusted
 code: their containers have memory and process limits, dropped capabilities,
 and can't reach the manager's API over the shared network. Details are in
 `docs/ARCHITECTURE.md` and `CLAUDE.md`.
+
+## License
+
+[MIT](LICENSE) © 2026 Jacob Sykes
