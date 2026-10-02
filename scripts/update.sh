@@ -10,7 +10,9 @@
 #   --force                              update even while a modpack install/backup is running
 #
 # What an update does:
-#   1. git fetch; works out the target commit (fast-forward only for branches)
+#   1. git fetch; works out the target commit (fast-forward only for branches).
+#      If the checkout is already there (e.g. after a manual `git pull`) but
+#      the running manager was built from something else, it's rebuilt anyway
 #   2. refuses if tracked files have local changes, or (without --force) if a
 #      CurseForge install or pre-update world backup is in progress — those
 #      run under the manager and would be interrupted by its restart
@@ -33,7 +35,7 @@ die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 mode=update
 ref=""
@@ -92,6 +94,18 @@ wait_healthy() {
   return 1
 }
 
+# The full commit the running manager image was built from (scripts/apply.sh
+# bakes it in as APP_COMMIT), or empty if there's no manager container, it
+# predates APP_COMMIT, or it was built from uncommitted changes.
+deployed_commit() {
+  local id built
+  id="$(docker compose ps -aq manager 2>/dev/null | head -n 1)"
+  [ -n "$id" ] || return 0
+  built="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$id" 2>/dev/null | sed -n 's/^APP_COMMIT=//p')"
+  case "$built" in ""|unknown|*-modified) return 0 ;; esac
+  git rev-parse --verify --quiet "${built}^{commit}" || true
+}
+
 current="$(git rev-parse HEAD)"
 branch="$(git symbolic-ref --short -q HEAD || true)"
 
@@ -133,20 +147,34 @@ else
   target="$(git rev-parse "$upstream")"
 fi
 
+deployed="$(deployed_commit)"
+# Checkout already at the target, but not yet built and running (a manual git pull).
+rebuild_only=false
 if [ "$target" = "$current" ]; then
-  echo "Already up to date ($(git log -1 --format='%h %s' HEAD))."
-  exit 0
+  if [ "$deployed" = "$current" ]; then
+    echo "Already up to date ($(git log -1 --format='%h %s' HEAD))."
+    exit 0
+  fi
+  rebuild_only=true
 fi
 
 if [ -z "$ref" ] && ! git merge-base --is-ancestor "$current" "$target"; then
   die "$branch has commits that aren't upstream (diverged) — resolve that by hand, or use --ref"
 fi
 
-log "Changes from $(git rev-parse --short "$current") to $(git rev-parse --short "$target")"
-if git merge-base --is-ancestor "$current" "$target"; then
-  git --no-pager log --oneline --no-decorate "$current..$target"
+if $rebuild_only; then
+  if [ -n "$deployed" ]; then built_from="$(git rev-parse --short "$deployed")"; else built_from="an unknown or locally modified version"; fi
+  log "The checkout is at $(git log -1 --format='%h %s' HEAD), but the running manager was built from $built_from"
+  if [ -n "$deployed" ] && git merge-base --is-ancestor "$deployed" "$current"; then
+    git --no-pager log --oneline --no-decorate "$deployed..$current"
+  fi
 else
-  echo "(not a fast-forward: moving to a different line of history)"
+  log "Changes from $(git rev-parse --short "$current") to $(git rev-parse --short "$target")"
+  if git merge-base --is-ancestor "$current" "$target"; then
+    git --no-pager log --oneline --no-decorate "$current..$target"
+  else
+    echo "(not a fast-forward: moving to a different line of history)"
+  fi
 fi
 
 if [ "$mode" = check ]; then
@@ -161,7 +189,8 @@ require_idle
 backup_dir="backups/$(date +%Y%m%d-%H%M%S)"
 log "Backing up the database to $backup_dir"
 mkdir -p "$backup_dir"
-echo "$current" > "$backup_dir/COMMIT"
+# The code the database belongs to: what's running, if known (a manual pull may already have moved the checkout).
+echo "${deployed:-$current}" > "$backup_dir/COMMIT"
 docker compose stop manager
 # Copy as the invoking user so the backup isn't root-owned.
 with_manager_data --user "$(id -u):$(id -g)" -v "$REPO_ROOT/$backup_dir:/backup" --entrypoint sh manager -c \
@@ -172,13 +201,17 @@ with_manager_data --user "$(id -u):$(id -g)" -v "$REPO_ROOT/$backup_dir:/backup"
 # Keep the newest 10 backups.
 find backups -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' | sort | head -n -10 | xargs -r rm -rf
 
-log "Moving to $(git rev-parse --short "$target")"
-if [ -z "$ref" ]; then
+if $rebuild_only; then
+  log "Rebuilding from $(git rev-parse --short HEAD)"
+elif [ -z "$ref" ]; then
+  log "Moving to $(git rev-parse --short "$target")"
   git merge --ff-only --quiet "$target"
 elif [ -n "$branch" ] && git show-ref --verify --quiet "refs/remotes/origin/$ref"; then
+  log "Moving to $(git rev-parse --short "$target")"
   git checkout --quiet "$ref" 2>/dev/null || git checkout --quiet -b "$ref" --track "origin/$ref"
   git merge --ff-only --quiet "$target"
 else
+  log "Moving to $(git rev-parse --short "$target")"
   git checkout --quiet --detach "$target"
 fi
 
