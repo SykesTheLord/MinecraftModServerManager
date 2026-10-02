@@ -40,16 +40,25 @@ export function ensurePlaceholderRoute(): void {
  * `master`/2.x branch is a rewrite with a different (YAML) schema and, as of
  * this writing, no hot-reload at all — do not upgrade the pinned image tag
  * without re-verifying this file against whatever version is deployed.
+ *
+ * `domainName` must be the FULL hostname players type: v1.3.4 routes by an
+ * exact (lowercased, dot-trimmed) match of the handshake's server address
+ * against it, and silently drops connections that match nothing — a bare
+ * subdomain never matches a real client.
  */
+export function routeHostname(subdomain: string): string {
+  return `${subdomain}.${env.BASE_DOMAIN.replace(/^\.+|\.+$/g, "")}`.toLowerCase();
+}
+
 export function writeInstanceRoute(instanceId: string, subdomain: string, containerName: string): void {
   const config = {
-    domainName: subdomain,
+    domainName: routeHostname(subdomain),
     listenTo: ":25565",
     proxyTo: `${containerName}:25565`,
   };
 
   fs.writeFileSync(routeFilePath(instanceId), JSON.stringify(config, null, 2), "utf8");
-  appLogger.info({ instanceId, subdomain }, "wrote infrared route");
+  appLogger.info({ instanceId, hostname: config.domainName }, "wrote infrared route");
 }
 
 export function removeInstanceRoute(instanceId: string): void {

@@ -188,8 +188,10 @@ confirmed by reading its source during development, **no hot-reload at all**
 (config is read once at startup). v1.3.4 is what actually does the
 fsnotify-based hot-reload this design depends on. `infrared/configWriter.ts`
 writes one JSON file per instance (`domainName`/`listenTo`/`proxyTo` fields —
-that exact schema, not YAML) into a directory Infrared watches. Two other
-real behaviors baked into that file's logic:
+that exact schema, not YAML) into a directory Infrared watches.
+`domainName` must be the full hostname (`<subdomain>.<BASE_DOMAIN>`):
+Infrared matches the client's handshake address exactly and silently drops
+anything unmatched. Two other real behaviors baked into that file's logic:
 - Infrared fatally exits if its config directory is ever completely empty,
   so a permanent harmless `_placeholder.json` route is maintained alongside
   real instance routes.
