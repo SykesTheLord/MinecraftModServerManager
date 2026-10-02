@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { instancesApi } from "../api/instances";
-import type { Instance, MissingFile } from "../api/types";
+import type { Instance, MissingFileDetail } from "../api/types";
 import { Layout } from "../components/Layout";
 import { SourceChip, StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
@@ -291,6 +291,22 @@ function CurseForgeInstallPanel({ instance, canManage, onChange }: { instance: I
     refetchInterval: installing ? 2000 : false,
   });
 
+  const awaiting = instance.status === "awaiting_files" && !installing;
+  // Names and download links come from CurseForge rather than the database, so they're fetched once
+  // here instead of with every poll of the instance (CurseForge limits API requests).
+  const queryClient = useQueryClient();
+  const missingFilesKey = ["cf-missing-files", instance.id];
+  const { data: missingFiles, error: missingFilesError } = useQuery({
+    queryKey: missingFilesKey,
+    queryFn: () => instancesApi.missingFiles(instance.id),
+    enabled: awaiting,
+    staleTime: 5 * 60 * 1000,
+  });
+  const onUploaded = () => {
+    onChange();
+    void queryClient.invalidateQueries({ queryKey: missingFilesKey });
+  };
+
   const retry = useMutation({ mutationFn: () => instancesApi.retryCurseForgeInstall(instance.id), onSuccess: onChange });
   const allUploaded = instance.missingFiles.length > 0 && instance.missingFiles.every((f) => f.uploaded);
 
@@ -324,11 +340,29 @@ function CurseForgeInstallPanel({ instance, canManage, onChange }: { instance: I
               </p>
             </div>
           </div>
-          <ul className="checklist">
-            {instance.missingFiles.map((file) => (
-              <MissingFileRow key={file.fileId} instanceId={instance.id} file={file} canManage={canManage} onUploaded={onChange} />
-            ))}
-          </ul>
+          {missingFilesError != null && (
+            <p className="error-text">
+              {errorMessage(missingFilesError, "Couldn't look these files up on CurseForge.")} Their file names are listed below.
+            </p>
+          )}
+          {!missingFiles && !missingFilesError ? (
+            <div className="page-loading">
+              <span className="spinner" aria-label="Loading" />
+            </div>
+          ) : (
+            <ul className="checklist">
+              {instance.missingFiles.map((file) => (
+                <MissingFileRow
+                  key={file.fileId}
+                  instanceId={instance.id}
+                  file={file}
+                  detail={missingFiles?.find((d) => d.fileId === file.fileId)}
+                  canManage={canManage}
+                  onUploaded={onUploaded}
+                />
+              ))}
+            </ul>
+          )}
         </>
       )}
 
@@ -367,11 +401,14 @@ function CurseForgeInstallPanel({ instance, canManage, onChange }: { instance: I
 function MissingFileRow({
   instanceId,
   file,
+  detail,
   canManage,
   onUploaded,
 }: {
   instanceId: string;
-  file: MissingFile;
+  file: Instance["missingFiles"][number];
+  /** Live from CurseForge; absent if that lookup failed. */
+  detail: MissingFileDetail | undefined;
   canManage: boolean;
   onUploaded: () => void;
 }) {
@@ -383,13 +420,15 @@ function MissingFileRow({
   return (
     <li>
       <div className="checklist-main">
-        <strong>{file.modName}</strong>
+        <strong>{detail?.modName ?? file.fileName}</strong>
         <code>{file.fileName}</code>
         {upload.isError && <div className="error-text">{errorMessage(upload.error, "Upload failed.")}</div>}
       </div>
-      <a className="button-link secondary small" href={file.pageUrl} target="_blank" rel="noreferrer">
-        Download <ExternalIcon />
-      </a>
+      {detail && (
+        <a className="button-link secondary small" href={detail.pageUrl} target="_blank" rel="noreferrer">
+          Download <ExternalIcon />
+        </a>
+      )}
       {file.uploaded ? (
         <span className="done-mark">✓ Uploaded</span>
       ) : (

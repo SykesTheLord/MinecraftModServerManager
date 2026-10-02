@@ -1,5 +1,5 @@
 import { api, ApiError } from "./client";
-import type { AutoUpdateMode, BackupInfo, Instance, PackVersionOption, ServerPropertiesView, UpdateWindow } from "./types";
+import type { AutoUpdateMode, BackupInfo, Instance, MissingFileDetail, PackVersionOption, ServerPropertiesView, UpdateWindow } from "./types";
 
 export interface CreateInstanceInput {
   name: string;
@@ -23,8 +23,9 @@ export const instancesApi = {
   properties: (id: string) => api.get<ServerPropertiesView>(`/instances/${id}/properties`),
   saveProperties: (id: string, properties: Record<string, string>, revision: string, restart: boolean) =>
     api.put<ServerPropertiesView & { restarted: boolean }>(`/instances/${id}/properties`, { properties, revision, restart }),
-  versions: (id: string) => api.get<PackVersionOption[]>(`/instances/${id}/versions`),
-  checkForUpdate: (id: string) => api.post<Instance>(`/instances/${id}/updates/check`),
+  /** `refresh`: force CurseForge's version list to be fetched again (otherwise reused for 12 hours). */
+  versions: (id: string, refresh = false) => api.get<PackVersionOption[]>(`/instances/${id}/versions${refresh ? "?refresh=1" : ""}`),
+  checkForUpdate: (id: string, refresh = false) => api.post<Instance>(`/instances/${id}/updates/check${refresh ? "?refresh=1" : ""}`),
   updateSettings: (id: string, settings: { autoUpdate?: AutoUpdateMode; window?: UpdateWindow | null }) =>
     api.put<Instance>(`/instances/${id}/updates/settings`, settings),
   backups: (id: string) => api.get<BackupInfo[]>(`/instances/${id}/backups`),
@@ -34,6 +35,7 @@ export const instancesApi = {
   applyUpdate: (id: string, versionId: number) => api.post<Instance>(`/instances/${id}/updates/apply`, { versionId }),
   createCurseForge: (input: CreateCurseForgeInstanceInput) => api.post<Instance>("/instances/curseforge", input),
   retryCurseForgeInstall: (id: string) => api.post<{ ok: true }>(`/instances/${id}/curseforge/retry`),
+  missingFiles: (id: string) => api.get<MissingFileDetail[]>(`/instances/${id}/curseforge/missing-files`),
   uploadCurseForgeFile: async (id: string, fileId: number, file: File): Promise<Instance> => {
     const res = await fetch(`/api/instances/${id}/curseforge/files/${fileId}`, {
       method: "PUT",

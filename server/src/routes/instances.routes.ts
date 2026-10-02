@@ -20,6 +20,7 @@ import {
 } from "../instances/packUpdates.js";
 import { listBackups } from "../instances/backups.js";
 import {
+  describeMissingFiles,
   isInstallRunning,
   parseMissingFiles,
   storeManualDownload,
@@ -44,10 +45,7 @@ export function serializeInstance(instance: InstanceRow, requester: UserRow) {
     installRunning: instance.source === "curseforge" && isInstallRunning(instance.id),
     updating: isUpdating(instance.id),
     updateWindowOpen: isWithinUpdateWindow(instance),
-    missingFiles: parseMissingFiles(instance).map(({ sha1: _sha1, md5: _md5, ...file }) => ({
-      ...file,
-      uploaded: uploaded?.has(file.fileName) ?? false,
-    })),
+    missingFiles: parseMissingFiles(instance).map((file) => ({ ...file, uploaded: uploaded?.has(file.fileName) ?? false })),
   };
 }
 
@@ -123,6 +121,13 @@ instancesRouter.post("/:id/curseforge/retry", requireInstanceRole("admin"), asyn
   res.json({ ok: true });
 });
 
+// Names and download links for the files a blocked install waits for — from CurseForge (via cfClient's cache), not the database.
+instancesRouter.get("/:id/curseforge/missing-files", requireInstanceRole("operator"), async (req, res) => {
+  const instance = requireRow(routeParam(req, "id"));
+  const uploaded = uploadedFileNames(instance.id);
+  res.json((await describeMissingFiles(instance)).map((f) => ({ ...f, uploaded: uploaded.has(f.fileName) })));
+});
+
 // Raw body (application/octet-stream): one manually downloaded file for a blocked install.
 instancesRouter.put("/:id/curseforge/files/:fileId", requireInstanceRole("admin"), async (req, res) => {
   const instance = instanceRepo.findById(routeParam(req, "id"));
@@ -157,14 +162,19 @@ instancesRouter.put("/:id/properties", requireInstanceRole("admin"), async (req,
 
 // ---- modpack versions & updates ----
 
+// `?refresh=1`: the admin clicked force refresh (CurseForge version lists are otherwise reused for 12 hours).
+const wantsRefresh = (value: unknown) => value === "1" || value === "true";
+
 instancesRouter.get("/:id/versions", requireInstanceRole("admin"), async (req, res) => {
   const row = requireRow(routeParam(req, "id"));
   const current = row.source === "ftb" ? row.ftb_version_id : row.cf_file_id;
-  res.json((await listPackVersions(row)).map((v) => ({ ...v, current: v.id === current })));
+  const versions = await listPackVersions(row, { refresh: wantsRefresh(req.query.refresh) });
+  res.json(versions.map((v) => ({ ...v, current: v.id === current })));
 });
 
 instancesRouter.post("/:id/updates/check", requireInstanceRole("admin"), async (req, res) => {
-  res.json(serializeInstance(await checkForUpdate(routeParam(req, "id")), req.user!));
+  const row = await checkForUpdate(routeParam(req, "id"), { refresh: wantsRefresh(req.query.refresh) });
+  res.json(serializeInstance(row, req.user!));
 });
 
 const updateSettingsSchema = z.object({

@@ -5,7 +5,7 @@
  * never shows a CSP-blocked image, and the CSP never has to be loosened for
  * whatever host some pack author linked.
  */
-export const ARTWORK_HOSTS = ["https://apps.modpacks.ch", "https://cdn.creeper.host", "https://media.forgecdn.net"];
+export const ARTWORK_HOSTS = ["https://cdn.feed-the-beast.com", "https://media.forgecdn.net"];
 
 export function allowedArtworkUrl(url: string | null | undefined): string | null {
   if (!url) return null;

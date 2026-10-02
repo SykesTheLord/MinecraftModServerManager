@@ -41,17 +41,25 @@ import { getCfFiles, getCfModpack, getCfMods } from "./cfClient.js";
  * the jars (verified against CurseForge's SHA-1, or MD5 if that's all it
  * lists; unverifiable files are refused) into a downloads repo the
  * installer is pointed at on the next attempt.
+ *
+ * The database keeps only the id and file name of each file an install
+ * waits for — names, links and checksums are looked up when they're shown or
+ * an upload is checked (through cfClient's cache). mc-image-helper keeps its
+ * own API cache in the volume (/data/.cache/curseforge, days by default) so
+ * retries don't re-query everything; CurseForge's API terms forbid caching,
+ * and this is a deliberate choice to stay under its request limits.
  */
 
+/** What's stored per file an install is waiting for: its id, and the file name the installer looks for. */
 export interface MissingFile {
   fileId: number;
-  modId: number;
+  fileName: string;
+}
+
+/** A missing file as shown to the admin, looked up live (not stored). */
+export interface MissingFileDetail extends MissingFile {
   modName: string;
   displayName: string;
-  fileName: string;
-  sha1: string | null;
-  /** Fallback for files CurseForge lists no SHA-1 for (absent on rows stored before it was recorded). */
-  md5?: string | null;
   pageUrl: string;
 }
 
@@ -71,7 +79,8 @@ export function isInstallRunning(instanceId: string): boolean {
 }
 
 export function parseMissingFiles(row: Pick<InstanceRow, "missing_files">): MissingFile[] {
-  return row.missing_files ? (JSON.parse(row.missing_files) as MissingFile[]) : [];
+  if (!row.missing_files) return [];
+  return (JSON.parse(row.missing_files) as MissingFile[]).map(({ fileId, fileName }) => ({ fileId, fileName }));
 }
 
 /** Which of an instance's missing files have already been uploaded. */
@@ -89,22 +98,27 @@ function loaderToServerType(modLoaderId: string): { serverType: ServerType; load
   return { serverType: match[1].toUpperCase() as ServerType, loaderVersion: match[2] };
 }
 
-async function describeMissingFiles(table: string): Promise<MissingFile[]> {
+async function identifyMissingFiles(table: string): Promise<MissingFile[]> {
   const fileIds = [...new Set([...table.matchAll(/\/(?:download|files)\/(\d+)/g)].map((m) => Number(m[1])))];
   if (fileIds.length === 0) throw new Error("The installer reported files needing a manual download, but none could be identified. See the install log.");
-  const files = await getCfFiles(fileIds);
-  const mods = new Map((await getCfMods([...new Set(files.map((f) => f.modId))])).map((m) => [m.id, m]));
-  return files.map((f) => {
-    const mod = mods.get(f.modId);
+  return (await getCfFiles(fileIds)).map((f) => ({ fileId: f.id, fileName: f.fileName }));
+}
+
+/** Names and download pages for the files an install is waiting for, fetched live from CurseForge. */
+export async function describeMissingFiles(instance: InstanceRow): Promise<MissingFileDetail[]> {
+  const waiting = parseMissingFiles(instance);
+  if (waiting.length === 0) return [];
+  const files = new Map((await getCfFiles(waiting.map((f) => f.fileId))).map((f) => [f.id, f]));
+  const mods = new Map((await getCfMods([...new Set([...files.values()].map((f) => f.modId))])).map((m) => [m.id, m]));
+  return waiting.map(({ fileId, fileName }) => {
+    const file = files.get(fileId);
+    const mod = file ? mods.get(file.modId) : undefined;
     return {
-      fileId: f.id,
-      modId: f.modId,
-      modName: mod?.name ?? f.displayName,
-      displayName: f.displayName,
-      fileName: f.fileName,
-      sha1: f.sha1,
-      md5: f.md5,
-      pageUrl: `${mod?.websiteUrl ?? `https://www.curseforge.com/minecraft/mc-mods/${f.modId}`}/files/${f.id}`,
+      fileId,
+      fileName,
+      modName: mod?.name ?? file?.displayName ?? fileName,
+      displayName: file?.displayName ?? fileName,
+      pageUrl: `${mod?.websiteUrl ?? `https://www.curseforge.com/minecraft/mc-mods/${file?.modId ?? ""}`}/files/${fileId}`,
     };
   });
 }
@@ -201,7 +215,7 @@ export async function installCurseForgeInstance(
     if (!instanceRepo.findById(instanceId)) return; // deleted meanwhile
 
     if (result.missingTable && result.exitCode !== 0) {
-      const missing = await describeMissingFiles(result.missingTable);
+      const missing = await identifyMissingFiles(result.missingTable);
       instanceRepo.setMissingFiles(instanceId, missing);
       instanceRepo.updateStatus(
         instanceId,
@@ -250,18 +264,20 @@ export async function installCurseForgeInstance(
 /**
  * Stores one manually downloaded file for a blocked install, after checking
  * it's exactly the file CurseForge lists (name and SHA-1, or MD5 when that's
- * all CurseForge has) — so a wrong or tampered jar can't slip into the server.
- * A file with no published hash can't be verified, so it's refused.
+ * all CurseForge has; looked up live) — so a wrong or tampered jar can't slip
+ * into the server. A file with no published hash can't be verified, so it's
+ * refused.
  */
 export async function storeManualDownload(instance: InstanceRow, fileId: number, body: Readable): Promise<void> {
   const wanted = parseMissingFiles(instance).find((f) => f.fileId === fileId);
   if (!wanted) throw new HttpError(404, "That file isn't one this install is waiting for.");
-  const expected = wanted.sha1 ? { algo: "sha1", value: wanted.sha1 } : wanted.md5 ? { algo: "md5", value: wanted.md5 } : null;
+  const live = (await getCfFiles([fileId]))[0];
+  if (!live || live.fileName !== wanted.fileName) {
+    throw new HttpError(409, `CurseForge no longer lists ${wanted.fileName} as it was. Retry the install to refresh the list of files.`);
+  }
+  const expected = live.sha1 ? { algo: "sha1", value: live.sha1 } : live.md5 ? { algo: "md5", value: live.md5 } : null;
   if (!expected) {
-    throw new HttpError(
-      409,
-      `CurseForge lists no checksum for ${wanted.fileName}, so an upload can't be verified. Retry the install to refresh the file list; if it still has none, it can't be added here.`
-    );
+    throw new HttpError(409, `CurseForge lists no checksum for ${wanted.fileName}, so an upload can't be verified.`);
   }
 
   const dir = path.join(stagingDir(instance.id), "mods");

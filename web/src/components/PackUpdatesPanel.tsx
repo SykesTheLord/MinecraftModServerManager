@@ -25,7 +25,16 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
     queryClient.invalidateQueries({ queryKey: ["instances"] });
   };
 
-  const check = useMutation({ mutationFn: () => instancesApi.checkForUpdate(instance.id), onSuccess: onInstance });
+  // CurseForge version lists are reused by the manager for up to 12 hours; force refresh fetches them again.
+  const cachedSource = instance.source === "curseforge";
+  const check = useMutation({
+    mutationFn: (refresh: boolean) => instancesApi.checkForUpdate(instance.id, refresh),
+    onSuccess: (updated, refresh) => {
+      onInstance(updated);
+      // The check just fetched the newest list; show it in "Other versions" too.
+      if (refresh) void queryClient.invalidateQueries({ queryKey: ["versions", instance.id] });
+    },
+  });
   const setMode = useMutation({
     mutationFn: (mode: AutoUpdateMode) => instancesApi.updateSettings(instance.id, { autoUpdate: mode }),
     onSuccess: onInstance,
@@ -40,10 +49,14 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
     },
   });
 
-  const { data: versions, isLoading: loadingVersions, error: versionsError } = useQuery({
+  const { data: versions, isLoading: loadingVersions, isFetching: fetchingVersions, error: versionsError } = useQuery({
     queryKey: ["versions", instance.id],
     queryFn: () => instancesApi.versions(instance.id),
     enabled: pickVersion,
+  });
+  const refreshVersions = useMutation({
+    mutationFn: () => instancesApi.versions(instance.id, true),
+    onSuccess: (fresh) => queryClient.setQueryData(["versions", instance.id], fresh),
   });
   const current = versions?.find((v) => v.current);
   const busy = instance.updating || instance.status === "creating" || apply.isPending;
@@ -72,9 +85,22 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
           <dt>Last checked</dt>
           <dd>
             {instance.update_checked_at ? timeAgo(instance.update_checked_at) : "Never"}{" "}
-            <button className="link small" onClick={() => check.mutate()} disabled={check.isPending}>
-              {check.isPending ? "Checking…" : "Check now"}
+            <button className="link small" onClick={() => check.mutate(false)} disabled={check.isPending}>
+              {check.isPending && !check.variables ? "Checking…" : "Check now"}
             </button>
+            {cachedSource && (
+              <>
+                {" · "}
+                <button
+                  className="link small"
+                  title="CurseForge version lists are reused for up to 12 hours. This fetches the list again now."
+                  onClick={() => check.mutate(true)}
+                  disabled={check.isPending}
+                >
+                  {check.isPending && check.variables ? "Refreshing…" : "Force refresh"}
+                </button>
+              </>
+            )}
           </dd>
         </div>
       </dl>
@@ -167,6 +193,20 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
         </button>
       ) : (
         <>
+          {cachedSource && versions && (
+            <div className="form-actions version-list-actions">
+              <span className="muted">CurseForge's list is reused for up to 12 hours.</span>
+              <button
+                type="button"
+                className="secondary small"
+                onClick={() => refreshVersions.mutate()}
+                disabled={refreshVersions.isPending || fetchingVersions}
+              >
+                {refreshVersions.isPending ? "Refreshing…" : "Force refresh"}
+              </button>
+            </div>
+          )}
+          {refreshVersions.isError && <p className="error-text">{errorMessage(refreshVersions.error, "Couldn't refresh the versions.")}</p>}
           {loadingVersions && <p className="muted">Loading versions…</p>}
           {versionsError && <p className="error-text">{errorMessage(versionsError, "Couldn't load versions.")}</p>}
           {versions && (

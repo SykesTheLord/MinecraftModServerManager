@@ -6,6 +6,7 @@ export const usersApi = {
   create: (username: string, password: string, globalRole: GlobalRole) =>
     api.post<ManagedUser>("/users", { username, password, globalRole }),
   remove: (id: string) => api.delete<void>(`/users/${id}`),
+  setRole: (id: string, globalRole: GlobalRole) => api.put<ManagedUser>(`/users/${id}/role`, { globalRole }),
   listAccess: (userId: string) => api.get<{ instanceId: string; role: InstanceRole }[]>(`/users/${userId}/access`),
   grantAccess: (userId: string, instanceId: string, role: InstanceRole) =>
     api.put<{ ok: true }>(`/users/${userId}/access`, { instanceId, role }),

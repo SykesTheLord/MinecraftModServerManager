@@ -45,14 +45,18 @@ export interface PackVersionOption {
   current: boolean;
 }
 
+/** A file a blocked CurseForge install waits for (only what the manager stores). */
 export interface MissingFile {
   fileId: number;
-  modId: number;
+  fileName: string;
+  uploaded: boolean;
+}
+
+/** The same file with its name and download page, looked up live from CurseForge. */
+export interface MissingFileDetail extends MissingFile {
   modName: string;
   displayName: string;
-  fileName: string;
   pageUrl: string;
-  uploaded: boolean;
 }
 
 export interface Instance {

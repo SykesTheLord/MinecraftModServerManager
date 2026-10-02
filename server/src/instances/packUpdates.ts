@@ -107,8 +107,12 @@ function currentVersionId(instance: InstanceRow): number | null {
   return instance.source === "ftb" ? instance.ftb_version_id : instance.cf_file_id;
 }
 
-/** Every version of the instance's pack, newest first. */
-export async function listPackVersions(instance: InstanceRow): Promise<PackVersionOption[]> {
+/**
+ * Every version of the instance's pack, newest first. CurseForge's list is
+ * reused for up to 12 hours (its API limits requests); `refresh` — only for
+ * an admin's explicit force-refresh — fetches it again. FTB's is always live.
+ */
+export async function listPackVersions(instance: InstanceRow, options: { refresh?: boolean } = {}): Promise<PackVersionOption[]> {
   if (instance.source === "ftb") {
     return (await listModpackVersions(instance.ftb_modpack_id)).map((v) => ({
       id: v.id,
@@ -119,7 +123,7 @@ export async function listPackVersions(instance: InstanceRow): Promise<PackVersi
     }));
   }
   if (instance.source === "curseforge" && instance.cf_mod_id) {
-    return (await listCfModpackFiles(instance.cf_mod_id)).map((f) => ({
+    return (await listCfModpackFiles(instance.cf_mod_id, options)).map((f) => ({
       id: f.id,
       name: f.displayName,
       minecraftVersion: f.minecraftVersion,
@@ -142,8 +146,8 @@ async function findCurrent(instance: InstanceRow, versions: PackVersionOption[])
 }
 
 /** The newest release version newer than the installed one, on the same Minecraft version. */
-export async function findUpdate(instance: InstanceRow): Promise<PackVersionOption | null> {
-  const versions = await listPackVersions(instance);
+export async function findUpdate(instance: InstanceRow, options: { refresh?: boolean } = {}): Promise<PackVersionOption | null> {
+  const versions = await listPackVersions(instance, options);
   const current = await findCurrent(instance, versions);
   if (!current) return null;
   return (
@@ -153,11 +157,11 @@ export async function findUpdate(instance: InstanceRow): Promise<PackVersionOpti
   );
 }
 
-export async function checkForUpdate(instanceId: string): Promise<InstanceRow> {
+export async function checkForUpdate(instanceId: string, options: { refresh?: boolean } = {}): Promise<InstanceRow> {
   const instance = instanceRepo.findById(instanceId);
   if (!instance) throw new HttpError(404, "Instance not found.");
   if (!updatable(instance)) throw new HttpError(400, "Only FTB and CurseForge servers can be updated.");
-  const available = await findUpdate(instance);
+  const available = await findUpdate(instance, options);
   instanceRepo.setUpdateCheck(instanceId, available ? { id: available.id, name: available.name } : null);
   return instanceRepo.findById(instanceId)!;
 }

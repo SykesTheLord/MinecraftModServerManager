@@ -84,6 +84,29 @@ CurseForge's API needs a key. Get a free one at
 re-run `./scripts/apply.sh`. Until then the CurseForge tab explains this
 and the rest of the app works as before.
 
+The key is yours and is governed by CurseForge's
+[3rd-party API terms](https://support.curseforge.com/support/solutions/articles/9000207405-curse-forge-3rd-party-api-terms-and-conditions).
+In practice: don't share it or reuse someone else's, and don't route the
+manager's traffic through a proxy or VPN to reach the API.
+
+**Caching, against the terms.** The terms also forbid caching API data. The
+manager caches anyway, so it stays under CurseForge's request limit for your
+key:
+- The manager keeps responses in memory: searches for 30 minutes, version
+  lists for 12 hours, pack details for an hour, and file details for 6
+  hours. Its restart clears them.
+- Version lists have a **Force refresh** button (on the new-server version
+  step, and on a server's Updates tab next to **Check now** and above
+  **Other versions**). Clicking it fetches the list from CurseForge right
+  away. Repeated clicks within a minute reuse that fresh copy. Scheduled
+  update checks use the cache, so they notice a new CurseForge release
+  within about 12 hours.
+- Your browser reuses results for 5 minutes.
+- The installer keeps its own cache in each server's volume.
+
+That's a deliberate choice, and the risk to your key is yours. If CurseForge
+limits your key anyway, the manager says so instead of failing vaguely.
+
 The key stays with the manager: each pack is downloaded and installed by a
 separate, short-lived container that is removed straight afterwards, and
 the server itself runs without the key, so a mod can't read it.
@@ -94,8 +117,9 @@ server goes to **Needs files** and its page lists each file with a
 **Download** link (to that exact file on CurseForge) and an **Upload file**
 button. Download each one in your browser and upload it; every upload is
 checked against CurseForge's own checksum, so only the exact file is
-accepted. Then click **Continue install**. The rest of the pack is cached in
-the server's volume, so continuing is quick.
+accepted. Then click **Continue install**. Mods already downloaded stay in
+the server's volume, so continuing is quick. The file names and links are
+looked up on CurseForge (through the manager's cache) rather than stored.
 
 ## Importing an existing server
 
@@ -247,8 +271,19 @@ from.
 
 ## Managing access
 
-Only a **superadmin** can create/delete instances, manage users, and grant
-access. Everything else needs per-instance access:
+Only a **platform admin** (called `superadmin` in the code and API) can
+create or import servers, manage users, and grant access. Everyone else
+needs per-instance access.
+
+To make someone a platform admin, tick **Platform admin** when adding them.
+For an existing user, use **Make platform admin…** on their row of the
+Users page, which asks you to confirm first. **Remove platform admin…**
+turns them back into a regular user, keeping only the server access granted
+to them. Either change applies to their very next request, including a
+session that's already open. You can't change your own role, so there is
+always at least one platform admin.
+
+Per-instance access:
 
 - Users page → add a user → grant them **operator** (start/stop/restart,
   console) or **admin** (also delete, edit subdomain) on specific instances.

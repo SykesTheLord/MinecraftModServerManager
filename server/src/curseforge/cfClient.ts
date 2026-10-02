@@ -8,7 +8,18 @@ import { allowedArtworkUrl } from "../http/artwork.js";
  * Unlike FTB's catalog it needs an API key — each self-hoster's own, from
  * https://console.curseforge.com/ — so everything here is unavailable until
  * CF_API_KEY is set.
+ *
+ * Use is governed by CurseForge's 3rd-party API terms
+ * (https://support.curseforge.com/support/solutions/articles/9000207405):
+ * the key is the operator's own and must not be shared, and requests
+ * identify this app. Those terms also forbid caching API data; responses
+ * ARE cached here anyway (in memory, briefly — see CACHE_TTL_MS), a
+ * deliberate choice by this project's owner to stay under CurseForge's
+ * request limits. The only CurseForge data persisted is what an instance
+ * needs to run (its pack and file ids, and the names of files an install is
+ * waiting for).
  */
+const USER_AGENT = "MinecraftModServerManager (+https://github.com/SykesTheLord/MinecraftModServerManager)";
 const MINECRAFT_GAME_ID = 432;
 const MODPACKS_CLASS_ID = 4471;
 /** The API refuses index + pageSize beyond this. */
@@ -87,13 +98,60 @@ export function isCurseForgeConfigured(): boolean {
   return Boolean(env.CF_API_KEY);
 }
 
+/**
+ * In-memory response cache. Identical concurrent calls share one request;
+ * failures aren't cached. TTLs follow how often the data actually changes:
+ * search results shift constantly, a pack's file list only grows when it's
+ * updated (and an admin can force a refresh of it), and a given file's
+ * metadata (name, checksums) never changes.
+ */
+const CACHE_TTL_MS = {
+  search: 30 * 60 * 1000,
+  modpack: 60 * 60 * 1000,
+  fileList: 12 * 60 * 60 * 1000,
+  file: 6 * 60 * 60 * 1000,
+} as const;
+/** A forced refresh still reuses anything fetched this recently, so repeated clicks can't burn the request quota. */
+const MIN_REFRESH_AGE_MS = 60 * 1000;
+const CACHE_MAX_ENTRIES = 1000;
+const cache = new Map<string, { fetchedAt: number; expiresAt: number; value: Promise<unknown> }>();
+
+function cached<T>(key: string, ttlMs: number, load: () => Promise<T>, refresh = false): Promise<T> {
+  const hit = cache.get(key);
+  const now = Date.now();
+  if (hit && hit.expiresAt > now && (!refresh || now - hit.fetchedAt < MIN_REFRESH_AGE_MS)) {
+    return hit.value as Promise<T>;
+  }
+  cache.delete(key);
+  const value = load();
+  cache.set(key, { fetchedAt: now, expiresAt: now + ttlMs, value });
+  value.catch(() => {
+    if (cache.get(key)?.value === value) cache.delete(key);
+  });
+  // Maps iterate in insertion order, so the first key is the oldest entry.
+  while (cache.size > CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value!);
+  return value;
+}
+
+/** Sorted, de-duplicated ids, so bulk lookups of the same set share a cache entry. */
+const idsKey = (ids: number[]) => [...new Set(ids)].sort((a, b) => a - b).join(",");
+
 async function cfFetch(path: string, init: RequestInit = {}): Promise<unknown> {
   if (!env.CF_API_KEY) throw new HttpError(503, "CurseForge isn't configured: set CF_API_KEY in .env.");
   const res = await fetch(`${env.CF_API_BASE_URL.replace(/\/$/, "")}${path}`, {
     ...init,
-    headers: { Accept: "application/json", "Content-Type": "application/json", "x-api-key": env.CF_API_KEY, ...init.headers },
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": USER_AGENT,
+      "x-api-key": env.CF_API_KEY,
+      ...init.headers,
+    },
   });
   if (res.status === 403 || res.status === 401) throw new HttpError(502, "CurseForge rejected the API key (CF_API_KEY).");
+  if (res.status === 429) {
+    throw new HttpError(503, "CurseForge is limiting requests for this API key right now (its usage quota). Try again later.");
+  }
   if (res.status === 404) throw new HttpError(404, "Not found on CurseForge.");
   if (!res.ok) throw new HttpError(502, `CurseForge request failed (${res.status}).`);
   return res.json();
@@ -150,6 +208,10 @@ export async function searchCfModpacks(params: {
   index: number;
   pageSize: number;
 }): Promise<{ packs: CfModpackSummary[]; totalCount: number; index: number; pageSize: number }> {
+  return cached(`search:${JSON.stringify(params)}`, CACHE_TTL_MS.search, () => searchUncached(params));
+}
+
+async function searchUncached(params: Parameters<typeof searchCfModpacks>[0]) {
   const qs = new URLSearchParams({
     gameId: String(MINECRAFT_GAME_ID),
     classId: String(MODPACKS_CLASS_ID),
@@ -173,13 +235,25 @@ export async function searchCfModpacks(params: {
   };
 }
 
-export async function getCfModpack(modId: number): Promise<CfModpackSummary> {
+export function getCfModpack(modId: number): Promise<CfModpackSummary> {
+  return cached(`mod:${modId}`, CACHE_TTL_MS.modpack, () => getCfModpackUncached(modId));
+}
+
+async function getCfModpackUncached(modId: number): Promise<CfModpackSummary> {
   const body = z.looseObject({ data: modSchema }).parse(await cfFetch(`/v1/mods/${modId}`));
   return summarizeMod(body.data);
 }
 
-/** A modpack's files, newest first (the most recent 100 — older ones are rarely worth deploying). */
-export async function listCfModpackFiles(modId: number): Promise<CfFileSummary[]> {
+/**
+ * A modpack's files, newest first (the most recent 100 — older ones are rarely
+ * worth deploying). Reused for 12 hours; `refresh` (an admin's explicit
+ * click) fetches it again.
+ */
+export function listCfModpackFiles(modId: number, options: { refresh?: boolean } = {}): Promise<CfFileSummary[]> {
+  return cached(`files:${modId}`, CACHE_TTL_MS.fileList, () => listCfModpackFilesUncached(modId), options.refresh);
+}
+
+async function listCfModpackFilesUncached(modId: number): Promise<CfFileSummary[]> {
   const files: CfFile[] = [];
   for (let index = 0; index < 100; index += 50) {
     const body = z
@@ -194,7 +268,11 @@ export async function listCfModpackFiles(modId: number): Promise<CfFileSummary[]
     .map(summarizeFile);
 }
 
-export async function getCfFile(modId: number, fileId: number): Promise<CfFileSummary> {
+export function getCfFile(modId: number, fileId: number): Promise<CfFileSummary> {
+  return cached(`file:${modId}:${fileId}`, CACHE_TTL_MS.file, () => getCfFileUncached(modId, fileId));
+}
+
+async function getCfFileUncached(modId: number, fileId: number): Promise<CfFileSummary> {
   const body = z.looseObject({ data: fileSchema }).parse(await cfFetch(`/v1/mods/${modId}/files/${fileId}`));
   return summarizeFile(body.data);
 }
@@ -212,6 +290,10 @@ export interface CfFileDetail {
 /** Bulk file lookup — used to describe the files a blocked install needs. */
 export async function getCfFiles(fileIds: number[]): Promise<CfFileDetail[]> {
   if (fileIds.length === 0) return [];
+  return cached(`bulk-files:${idsKey(fileIds)}`, CACHE_TTL_MS.file, () => getCfFilesUncached(fileIds));
+}
+
+async function getCfFilesUncached(fileIds: number[]): Promise<CfFileDetail[]> {
   const body = z
     .looseObject({ data: z.array(fileSchema) })
     .parse(await cfFetch("/v1/mods/files", { method: "POST", body: JSON.stringify({ fileIds }) }));
@@ -228,6 +310,10 @@ export async function getCfFiles(fileIds: number[]): Promise<CfFileDetail[]> {
 /** Bulk mod lookup. */
 export async function getCfMods(modIds: number[]): Promise<CfModpackSummary[]> {
   if (modIds.length === 0) return [];
+  return cached(`bulk-mods:${idsKey(modIds)}`, CACHE_TTL_MS.modpack, () => getCfModsUncached(modIds));
+}
+
+async function getCfModsUncached(modIds: number[]): Promise<CfModpackSummary[]> {
   const body = z
     .looseObject({ data: z.array(modSchema) })
     .parse(await cfFetch("/v1/mods", { method: "POST", body: JSON.stringify({ modIds }) }));

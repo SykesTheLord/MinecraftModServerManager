@@ -48,5 +48,6 @@ curseforgeRouter.get("/modpacks", async (req, res) => {
 curseforgeRouter.get("/modpacks/:id/files", async (req, res) => {
   const modId = Number(routeParam(req, "id"));
   if (!Number.isInteger(modId)) throw new HttpError(400, "Invalid modpack id.");
-  res.json(await listCfModpackFiles(modId));
+  // `?refresh=1`: the admin clicked force refresh (otherwise reused for 12 hours).
+  res.json(await listCfModpackFiles(modId, { refresh: req.query.refresh === "1" }));
 });

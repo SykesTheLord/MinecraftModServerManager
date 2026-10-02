@@ -9,7 +9,7 @@ land, add new ones as they're found. Don't let it go stale.
 - [x] SQLite schema + migrations (`user`, `instance_access`, `instance`, `settings`).
 - [x] Auth: single seeded superadmin, session-based login, `requireAuth`/`requireSuperadmin`/`requireInstanceRole` middleware.
 - [x] Multi-user, per-instance role grants (`admin`/`operator`), enforced server-side on every instance-scoped route.
-- [x] FTB catalog integration (search modpacks, list versions) — verified live against `api.modpacks.ch`.
+- [x] FTB catalog integration (search modpacks, list versions) — verified live against `api.feed-the-beast.com/v1/modpacks` (moved off the stale legacy `api.modpacks.ch`).
 - [x] Docker Compose skeleton: `manager` + `infrared` (pinned `1.3.4`), shared `mc-net` network.
 - [x] Instance lifecycle (`instanceService`): create/start/stop/restart/delete, with volume + Infrared route + health polling wired in.
 - [x] Infrared route file writer, verified live: hot-reload confirmed working with zero Infrared restart.
@@ -72,7 +72,7 @@ land, add new ones as they're found. Don't let it go stale.
 
 ## Verified but worth re-checking periodically
 
-- [ ] FTB's `api.modpacks.ch` endpoint shapes (unofficial, community-documented — could change without notice).
+- [ ] FTB's `api.feed-the-beast.com/v1/modpacks` endpoint shapes (unofficial, community-documented — could change without notice).
 - [ ] The Infrared `v1.3.4` pin. Its config schema and hot-reload behavior are load-bearing for this whole design — do not bump the image tag without re-reading `server/src/infrared/configWriter.ts`'s doc comment and re-verifying against whatever version you're moving to.
 - [ ] The `KNOWN_JAVA_TAGS` set in `server/src/docker/javaImage.ts` — itzg adds new Java-tagged image variants over time (e.g. a future `java29`); packs targeting a Java version not in that set silently fall back to the `stable` tag, which may or may not still work.
 

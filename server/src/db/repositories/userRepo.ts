@@ -54,6 +54,10 @@ export const userRepo = {
     ).run(passwordHash, new Date().toISOString(), id);
   },
 
+  setGlobalRole(id: string, globalRole: GlobalRole): void {
+    db.prepare("UPDATE user SET global_role = ?, updated_at = ? WHERE id = ?").run(globalRole, new Date().toISOString(), id);
+  },
+
   delete(id: string): void {
     db.prepare("DELETE FROM user WHERE id = ?").run(id);
   },

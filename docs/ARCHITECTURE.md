@@ -167,8 +167,33 @@ for names, file names and SHA-1s, and puts the instance in
 matches CurseForge's** (MD5 when CurseForge lists no SHA-1; a file with
 neither is refused, since it can't be verified), and copied into the volume's `.manual-downloads/`
 before the next install attempt, which runs with
-`--downloads-repo=/data/.manual-downloads`. mc-image-helper caches API
-responses in the volume (2 days by default), so retries are fast.
+`--downloads-repo=/data/.manual-downloads`.
+
+**Caching vs. CurseForge's API terms.** The 3rd-party API terms forbid
+saving or caching API data. This project caches anyway, deliberately, to
+stay under CurseForge's per-key request limits:
+- `cfClient.ts` keeps responses in memory with per-kind TTLs
+  (`CACHE_TTL_MS`): searches 30 minutes, version lists 12 hours, pack
+  details 1 hour, file details 6 hours. An admin's explicit **Force
+  refresh** (`?refresh=1` on the version-list and update-check endpoints)
+  refetches a version list, but anything fetched within the last minute is
+  reused, so repeated clicks can't burn the quota. Concurrent identical
+  calls share one request, failures
+  aren't cached, and it holds at most 1000 entries.
+- mc-image-helper keeps its default API cache in `/data/.cache/curseforge`.
+  Backups exclude `./.cache`.
+- The browser reuses CurseForge query results for 5 minutes.
+
+What's *persisted* stays minimal. The database keeps only each missing
+file's id and file name, which the installer needs. Names, download links
+and checksums are looked up through the cache, via `GET
+/api/instances/:id/curseforge/missing-files` and again when an upload is
+checked. Migration 0007 stripped what older versions stored. What an
+instance runs (pack and file ids, plus the pack/version names shown for it)
+is kept as that instance's own configuration. Requests carry an identifying
+User-Agent, and a 429 is reported as CurseForge's quota rather than a
+generic failure. `/api` responses are `Cache-Control: no-store`: they're
+per-user, and that's about browsers and proxies, not the caches above.
 
 Restarts and deletes: install containers left over from a manager restart
 are removed on boot, and the instance goes to `error` with a retry button.
@@ -349,9 +374,8 @@ network), with a bare-repo upstream one commit ahead:
 
 The catalog UIs show pack art straight from FTB's and CurseForge's CDNs.
 `img-src` allows exactly `http/artwork.ts#ARTWORK_HOSTS`
-(`apps.modpacks.ch`, `cdn.creeper.host`, `media.forgecdn.net`), and the
-catalog clients drop artwork URLs on any other host (a few FTB packs link
-art elsewhere). Those packs show a placeholder instead of a CSP-blocked
+(`cdn.feed-the-beast.com`, `media.forgecdn.net`), and the catalog clients
+drop artwork URLs on any other host. Those packs show a placeholder instead of a CSP-blocked
 image, and the policy isn't widened for arbitrary hosts.
 
 ## Modpack source: FTB's own catalog, not CurseForge
@@ -359,9 +383,15 @@ image, and the policy isn't widened for arbitrary hosts.
 (Historical heading. CurseForge is now supported too, see above. FTB stays
 the zero-configuration default.)
 
-`server/src/ftb/ftbCatalogClient.ts` calls `api.modpacks.ch/public/...` — the
-same unauthenticated API that backs both the FTB App and
+`server/src/ftb/ftbCatalogClient.ts` calls
+`api.feed-the-beast.com/v1/modpacks/public/...` — the same unauthenticated
+API that backs both the FTB App and
 https://feed-the-beast.com/modpacks/server-files/linux. No API key needed.
+It used `api.modpacks.ch/public/...` until that legacy host turned out to
+have stopped receiving new versions in August 2024 (FTB NeoTech: 1.7.0
+there, 1.13.0 on the new host). Pre-move version ids are identical on both,
+so instances created against the old host keep working; newer ids only
+exist on the new host, which itzg's FTBA installer also uses.
 Confirmed live during implementation:
 - `GET /public/modpack/all` → `{ packs: number[] }` — every public pack id
   (~90). The UI lists the whole catalog. The manager fetches every pack's

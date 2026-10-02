@@ -45,6 +45,11 @@ export function createApp() {
   app.use(express.json());
   app.use(sessionMiddleware);
   app.use("/api", requireSameOriginForWrites);
+  // API responses are per-user and live; no browser or proxy should keep them.
+  app.use("/api", (_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+  });
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
   app.get("/api/docker/ping", requireAuth, async (_req, res) => {

@@ -25,5 +25,7 @@ export const curseforgeApi = {
     if (params.loader) qs.set("loader", params.loader);
     return api.get<CfSearchPage>(`/curseforge/modpacks?${qs}`);
   },
-  files: (modId: number) => api.get<CfFileSummary[]>(`/curseforge/modpacks/${modId}/files`),
+  /** `refresh`: force the list to be fetched from CurseForge again (otherwise reused for 12 hours). */
+  files: (modId: number, refresh = false) =>
+    api.get<CfFileSummary[]>(`/curseforge/modpacks/${modId}/files${refresh ? "?refresh=1" : ""}`),
 };

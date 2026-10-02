@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ftbApi } from "../api/ftb";
@@ -36,6 +36,9 @@ interface PackVersion {
   loader: string | null;
   recommendedMemoryMb: number | null;
 }
+
+const CF_TERMS_URL =
+  "https://support.curseforge.com/support/solutions/articles/9000207405-curse-forge-3rd-party-api-terms-and-conditions";
 
 const MEMORY_OPTIONS = [2048, 3072, 4096, 6144, 8192, 10240, 12288, 16384];
 // Mirrors server/src/docker/javaImage.ts KNOWN_JAVA_VERSIONS (validated server-side).
@@ -157,7 +160,13 @@ function CurseForgeSource({ onSelect }: { onSelect: (pack: CfModpackSummary) => 
           </a>
           , set <code>CF_API_KEY</code> in <code>.env</code>, and re-run <code>./scripts/apply.sh</code>.
         </p>
-        <p className="muted">The key stays with the manager — modpack servers never see it.</p>
+        <p className="muted">
+          The key is yours: using it means accepting CurseForge's{" "}
+          <a href={CF_TERMS_URL} target="_blank" rel="noreferrer">
+            3rd-party API terms
+          </a>
+          , which forbid sharing it with anyone. It stays with the manager — modpack servers never see it.
+        </p>
       </div>
     );
   }
@@ -190,8 +199,11 @@ function SelectedPackHeader({ pack, onChange }: { pack: SelectedPack; onChange: 
 }
 
 function VersionStep({ pack, onSelect }: { pack: SelectedPack; onSelect: (v: PackVersion) => void }) {
-  const { data: versions, isLoading, error } = useQuery({
+  // Set by the force-refresh button: the next fetch asks the manager to bypass its 12-hour CurseForge cache.
+  const forceRefresh = useRef(false);
+  const { data: versions, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ["pack-versions", pack.source, pack.id],
+    staleTime: 5 * 60 * 1000,
     queryFn: async (): Promise<PackVersion[]> => {
       if (pack.source === "ftb") {
         return (await ftbApi.versions(pack.id)).map((v) => ({
@@ -204,7 +216,9 @@ function VersionStep({ pack, onSelect }: { pack: SelectedPack; onSelect: (v: Pac
           recommendedMemoryMb: v.recommendedMemoryMb,
         }));
       }
-      return (await curseforgeApi.files(pack.id)).map((f) => ({
+      const refresh = forceRefresh.current;
+      forceRefresh.current = false;
+      return (await curseforgeApi.files(pack.id, refresh)).map((f) => ({
         id: f.id,
         name: f.displayName,
         type: f.releaseType,
@@ -220,7 +234,23 @@ function VersionStep({ pack, onSelect }: { pack: SelectedPack; onSelect: (v: Pac
     <section className="card">
       <div className="card-header">
         <h2>Pick a version</h2>
-        {versions && <span className="muted">{versions.length} available · newest first</span>}
+        <span className="card-header-actions">
+          {versions && <span className="muted">{versions.length} available · newest first</span>}
+          {pack.source === "curseforge" && (
+            <button
+              type="button"
+              className="secondary small"
+              title="CurseForge version lists are reused for up to 12 hours. This fetches the list again now."
+              disabled={isFetching}
+              onClick={() => {
+                forceRefresh.current = true;
+                void refetch();
+              }}
+            >
+              {isFetching && !isLoading ? "Refreshing…" : "Force refresh"}
+            </button>
+          )}
+        </span>
       </div>
       {isLoading && <p className="muted">Loading versions…</p>}
       {error && <p className="error-text">{errorMessage(error, "Couldn't load versions.")}</p>}

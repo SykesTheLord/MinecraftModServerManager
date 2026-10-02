@@ -35,6 +35,7 @@ export function CfPackBrowser({ onSelect }: { onSelect: (pack: CfModpackSummary)
       const next = last.index + last.pageSize;
       return next < last.totalCount ? next : undefined;
     },
+    // Results are reused for a few minutes: CurseForge limits API requests.
     staleTime: 5 * 60 * 1000,
   });
 

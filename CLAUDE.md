@@ -142,8 +142,15 @@ then built from the installer's `.curseforge-manifest.json`
 QUILT` server — **never give a server container the key or
 `TYPE=AUTO_CURSEFORGE`**. Files whose authors block automated downloads
 (mc-image-helper only treats a CDN **404** as that) put the instance in
-`awaiting_files`; uploads are SHA-1-checked against CurseForge and fed back
-via `--downloads-repo`. See `docs/ARCHITECTURE.md` "CurseForge modpacks".
+`awaiting_files`; uploads are SHA-1-checked (MD5 fallback) against CurseForge,
+looked up via the API, and fed back via `--downloads-repo`. CurseForge's API
+terms forbid caching API data, but the owner has deliberately chosen to
+cache (in-memory TTL cache in `cfClient.ts`, mc-image-helper's own volume
+cache, 5-minute browser reuse) to stay under the request limit — don't
+remove it as a "compliance fix". Persisted CurseForge data stays minimal:
+`missing_files` holds just `{fileId, fileName}`, and names/links come from
+`GET …/curseforge/missing-files`. See `docs/ARCHITECTURE.md` "CurseForge
+modpacks".
 
 ### server.properties editing and modpack updates
 
@@ -171,8 +178,9 @@ via `--downloads-repo`. See `docs/ARCHITECTURE.md` "CurseForge modpacks".
 
 ### Modpack source: FTB's own catalog (and CurseForge)
 
-`ftb/ftbCatalogClient.ts` talks to `api.modpacks.ch/public/...`, the same
-unauthenticated API backing the FTB App and
+`ftb/ftbCatalogClient.ts` talks to `api.feed-the-beast.com/v1/modpacks/public/...`
+(not the legacy `api.modpacks.ch`, which stopped getting new versions in
+2024), the same unauthenticated API backing the FTB App and
 https://feed-the-beast.com/modpacks/server-files/linux. No API key. The UI
 lists the whole catalog (`/modpack/all`, ~90 packs; details fetched 8 at a
 time and cached 1h server-side). This is
@@ -231,7 +239,10 @@ allowing any instance-scoped action. `operator` covers start/stop/restart/
 console; `admin` (per-instance) additionally covers delete, subdomain edit,
 server.properties, pack updates/auto-update settings, and CurseForge
 retry/manual-file upload.
-Only a superadmin can create or import instances or manage users at all. The frontend
+Only a superadmin ("platform admin" in the UI) can create or import instances or manage users at all.
+Superadmins can promote or demote other users (`PUT /api/users/:id/role`) but never themselves,
+which also guarantees at least one superadmin always remains. Roles are read from the DB on every
+request, so changes apply to open sessions immediately. The frontend
 receives the caller's `effectiveRole` per instance in list/get responses
 (`routes/instances.routes.ts`) so the UI can gate actions without guessing.
 

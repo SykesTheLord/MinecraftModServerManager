@@ -71,6 +71,38 @@ usersRouter.delete("/:id", requireSuperadmin, (req, res) => {
   res.status(204).end();
 });
 
+const roleChangeSchema = z.object({ globalRole: z.enum(["superadmin", "user"]) });
+
+/**
+ * Promotes a user to platform admin (superadmin: every server, user
+ * management, creating/importing servers) or back to a regular user. Takes
+ * effect on their next request — roles are read from the database every time.
+ */
+usersRouter.put("/:id/role", requireSuperadmin, (req, res) => {
+  const parsed = roleChangeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: z.prettifyError(parsed.error) });
+    return;
+  }
+  const target = userRepo.findById(routeParam(req, "id"));
+  if (!target) {
+    res.status(404).json({ error: "User not found." });
+    return;
+  }
+  // Also rules out demoting the last platform admin: the caller is one, and can't be the target.
+  if (target.id === req.user!.id) {
+    res.status(400).json({ error: "You cannot change your own role." });
+    return;
+  }
+  const { globalRole } = parsed.data;
+  if (target.global_role === "superadmin" && globalRole !== "superadmin" && listUsers().filter((u) => u.global_role === "superadmin").length <= 1) {
+    res.status(400).json({ error: "Cannot demote the last platform admin." });
+    return;
+  }
+  userRepo.setGlobalRole(target.id, globalRole);
+  res.json({ id: target.id, username: target.username, globalRole });
+});
+
 const accessGrantSchema = z.object({
   instanceId: z.uuid(),
   role: z.enum(["admin", "operator"]),

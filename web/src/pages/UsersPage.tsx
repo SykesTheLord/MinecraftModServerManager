@@ -5,12 +5,18 @@ import { instancesApi } from "../api/instances";
 import { Layout } from "../components/Layout";
 import { errorMessage, latestMutationError } from "../api/client";
 import { PageHeader } from "../components/PageHeader";
-import type { Instance, InstanceRole } from "../api/types";
+import { useCurrentUser } from "../hooks/useCurrentUser";
+import type { GlobalRole, Instance, InstanceRole, ManagedUser } from "../api/types";
+
+const PLATFORM_ADMIN_HELP =
+  "Full control of the manager: every server, creating and importing servers, and managing users (including other platform admins).";
 
 export function UsersPage() {
   const queryClient = useQueryClient();
+  const { data: me } = useCurrentUser();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [platformAdmin, setPlatformAdmin] = useState(false);
 
   const { data: users } = useQuery({ queryKey: ["users"], queryFn: usersApi.list });
   const { data: instances } = useQuery({ queryKey: ["instances"], queryFn: instancesApi.list });
@@ -18,21 +24,33 @@ export function UsersPage() {
   const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: ["users"] });
 
   const createUser = useMutation({
-    mutationFn: () => usersApi.create(username, password, "user"),
+    mutationFn: () => usersApi.create(username, password, platformAdmin ? "superadmin" : "user"),
     onSuccess: () => {
       setUsername("");
       setPassword("");
+      setPlatformAdmin(false);
       invalidateUsers();
     },
   });
 
   const removeUser = useMutation({ mutationFn: (id: string) => usersApi.remove(id), onSuccess: invalidateUsers });
-  const superadmins = users?.filter((u) => u.globalRole === "superadmin") ?? [];
-  const regularUsers = users?.filter((u) => u.globalRole !== "superadmin") ?? [];
+  const setRole = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: GlobalRole }) => usersApi.setRole(id, role),
+    onSuccess: invalidateUsers,
+  });
+
+  // Platform admins first, then everyone else; alphabetical within each.
+  const sorted = [...(users ?? [])].sort(
+    (a, b) => Number(b.globalRole === "superadmin") - Number(a.globalRole === "superadmin") || a.username.localeCompare(b.username)
+  );
+  const hasRegularUsers = sorted.some((u) => u.globalRole !== "superadmin");
 
   return (
     <Layout title="Users">
-      <PageHeader title="Users" subtitle="Superadmins can do everything. Everyone else only sees the servers granted to them below." />
+      <PageHeader
+        title="Users"
+        subtitle="Platform admins can do everything. Everyone else only sees the servers granted to them below."
+      />
 
       <section className="card">
         <h2>Add user</h2>
@@ -58,60 +76,134 @@ export function UsersPage() {
             />
             <span className="hint">At least 8 characters. Share it with them privately; they can change it under Settings.</span>
           </label>
-          {createUser.isError && (
-            <p className="error-text">{errorMessage(createUser.error, "Failed to create user.")}</p>
-          )}
+          <label className="checkbox">
+            <input type="checkbox" checked={platformAdmin} onChange={(e) => setPlatformAdmin(e.target.checked)} />
+            <span>
+              Platform admin
+              <span className="hint">{PLATFORM_ADMIN_HELP}</span>
+            </span>
+          </label>
+          {createUser.isError && <p className="error-text">{errorMessage(createUser.error, "Failed to create user.")}</p>}
           <button type="submit" disabled={createUser.isPending}>
-            {createUser.isPending ? "Adding…" : "Add user"}
+            {createUser.isPending ? "Adding…" : platformAdmin ? "Add platform admin" : "Add user"}
           </button>
         </form>
       </section>
 
       <section className="card">
         <h2>Existing users</h2>
-        {superadmins.length > 0 && (
-          <p className="muted">
-            Superadmin{superadmins.length === 1 ? "" : "s"} (access to everything):{" "}
-            {superadmins.map((u) => u.username).join(", ")}
-          </p>
+        {latestMutationError(removeUser, setRole) != null && (
+          <p className="error-text">{errorMessage(latestMutationError(removeUser, setRole), "Failed to update the user.")}</p>
         )}
-        {removeUser.isError && <p className="error-text">{errorMessage(removeUser.error, "Failed to remove user.")}</p>}
-        {users && regularUsers.length === 0 && <div className="empty-state">No other users yet. Add one above.</div>}
-        {regularUsers.length > 0 && instances?.length === 0 && (
+        {hasRegularUsers && instances?.length === 0 && (
           <p className="muted">There are no servers yet, so there's nothing to grant access to.</p>
         )}
         <ul className="user-list">
-          {regularUsers.map((user) => (
+          {sorted.map((user) => (
             <UserRow
               key={user.id}
-              userId={user.id}
-              username={user.username}
+              user={user}
+              isSelf={user.id === me?.id}
               instances={instances ?? []}
-              removing={removeUser.isPending && removeUser.variables === user.id}
+              busy={
+                (removeUser.isPending && removeUser.variables === user.id) ||
+                (setRole.isPending && setRole.variables?.id === user.id)
+              }
               onRemove={() => removeUser.mutate(user.id)}
+              onSetRole={(role) => setRole.mutate({ id: user.id, role })}
             />
           ))}
         </ul>
+        {users && !hasRegularUsers && <p className="muted">No other users yet. Add one above.</p>}
       </section>
     </Layout>
   );
 }
 
 function UserRow({
-  userId,
-  username,
+  user,
+  isSelf,
   instances,
-  removing,
+  busy,
   onRemove,
+  onSetRole,
 }: {
-  userId: string;
-  username: string;
+  user: ManagedUser;
+  isSelf: boolean;
   instances: Instance[];
-  removing: boolean;
+  busy: boolean;
   onRemove: () => void;
+  onSetRole: (role: GlobalRole) => void;
 }) {
+  const [confirming, setConfirming] = useState<"remove" | "role" | null>(null);
+  const isPlatformAdmin = user.globalRole === "superadmin";
+
+  return (
+    <li className="user-row">
+      <div className="user-row-header">
+        <span className="avatar" aria-hidden="true">
+          {user.username.slice(0, 1)}
+        </span>
+        <span className="user-name">
+          <strong>{user.username}</strong>
+          {isSelf && <span className="muted">(you)</span>}
+          {isPlatformAdmin && <span className="chip accent">Platform admin</span>}
+        </span>
+        {!isSelf &&
+          (confirming === "remove" ? (
+            <>
+              <span className="muted">Remove {user.username} and their access?</span>
+              <button className="danger small" onClick={onRemove} disabled={busy}>
+                {busy ? "Removing…" : "Remove"}
+              </button>
+              <button className="secondary small" onClick={() => setConfirming(null)} disabled={busy}>
+                Cancel
+              </button>
+            </>
+          ) : confirming === "role" ? (
+            <>
+              <span className="muted">
+                {isPlatformAdmin
+                  ? `Make ${user.username} a regular user? They keep only the server access granted below.`
+                  : `Make ${user.username} a platform admin? ${PLATFORM_ADMIN_HELP}`}
+              </span>
+              <button
+                className={isPlatformAdmin ? "small" : "danger small"}
+                onClick={() => {
+                  onSetRole(isPlatformAdmin ? "user" : "superadmin");
+                  setConfirming(null);
+                }}
+                disabled={busy}
+              >
+                {isPlatformAdmin ? "Make regular user" : "Make platform admin"}
+              </button>
+              <button className="secondary small" onClick={() => setConfirming(null)} disabled={busy}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="secondary small" onClick={() => setConfirming("role")} disabled={busy}>
+                {isPlatformAdmin ? "Remove platform admin…" : "Make platform admin…"}
+              </button>
+              <button className="secondary small" onClick={() => setConfirming("remove")} disabled={busy}>
+                Remove user…
+              </button>
+            </>
+          ))}
+      </div>
+
+      {isPlatformAdmin ? (
+        <p className="muted user-row-note">Access to every server.</p>
+      ) : (
+        <AccessGrants userId={user.id} username={user.username} instances={instances} />
+      )}
+    </li>
+  );
+}
+
+function AccessGrants({ userId, username, instances }: { userId: string; username: string; instances: Instance[] }) {
   const queryClient = useQueryClient();
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const { data: access } = useQuery({ queryKey: ["user-access", userId], queryFn: () => usersApi.listAccess(userId) });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["user-access", userId] });
@@ -128,29 +220,7 @@ function UserRow({
   const roleFor = (instanceId: string) => access?.find((a) => a.instanceId === instanceId)?.role ?? "";
 
   return (
-    <li className="user-row">
-      <div className="user-row-header">
-        <span className="avatar" aria-hidden="true">
-          {username.slice(0, 1)}
-        </span>
-        <strong>{username}</strong>
-        {confirmingRemove ? (
-          <>
-            <span className="muted">Remove {username} and their access?</span>
-            <button className="danger small" onClick={onRemove} disabled={removing}>
-              {removing ? "Removing…" : "Remove"}
-            </button>
-            <button className="secondary small" onClick={() => setConfirmingRemove(false)} disabled={removing}>
-              Cancel
-            </button>
-          </>
-        ) : (
-          <button className="secondary small" onClick={() => setConfirmingRemove(true)}>
-            Remove user…
-          </button>
-        )}
-      </div>
-
+    <>
       {latestMutationError(grant, revoke) != null && (
         <p className="error-text">{errorMessage(latestMutationError(grant, revoke), "Failed to update access.")}</p>
       )}
@@ -175,6 +245,6 @@ function UserRow({
           </div>
         ))}
       </div>
-    </li>
+    </>
   );
 }

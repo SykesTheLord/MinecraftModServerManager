@@ -7,6 +7,13 @@ import { allowedArtworkUrl } from "../http/artwork.js";
  * list modpacks and their Linux server files. It is unauthenticated (no API
  * key), unlike CurseForge's CFCore API.
  *
+ * FTB moved this API to api.feed-the-beast.com/v1/modpacks; the legacy
+ * api.modpacks.ch host still answers but stopped receiving new versions in
+ * August 2024 (FTB NeoTech ends at 1.7.0 there, 1.13.0 here) and rejects
+ * newer version ids. Version ids from before the move are the same on both,
+ * so existing instances are unaffected. itzg's FTBA installer uses this host
+ * too, so any version listed here is one it can install.
+ *
  * Endpoint shapes confirmed live: GET /public/modpack/all returns {packs:
  * number[]} (every public pack id); GET /public/modpack/{id} returns {id,
  * name, synopsis, art, tags, installs, updated, versions: [{id, name, type,
@@ -14,7 +21,9 @@ import { allowedArtworkUrl } from "../http/artwork.js";
  * community-documented rather than officially versioned by FTB, so it could
  * change without notice — worth a periodic sanity check.
  */
-const FTB_API_BASE = "https://api.modpacks.ch/public";
+const FTB_API_BASE = "https://api.feed-the-beast.com/v1/modpacks/public";
+// Some clients' default user agents get a 403 here; identify ourselves rather than rely on fetch's default.
+const USER_AGENT = "MinecraftModServerManager (+https://github.com/SykesTheLord/MinecraftModServerManager)";
 
 const targetSchema = z.looseObject({
   name: z.string(),
@@ -83,7 +92,7 @@ export interface ModpackVersionSummary {
 }
 
 async function fetchJson<S extends z.ZodType>(url: string, schema: S): Promise<z.infer<S>> {
-  const res = await fetch(url);
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
   if (!res.ok) {
     throw new Error(`FTB catalog request failed (${res.status}): ${url}`);
   }

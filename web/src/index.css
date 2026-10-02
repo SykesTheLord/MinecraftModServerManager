@@ -563,6 +563,19 @@ main.narrow {
   margin: 0;
 }
 
+.card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.version-list-actions {
+  align-items: center;
+  margin: 0 0 0.75rem;
+}
+
 .two-col {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -1594,8 +1607,19 @@ form.console-input input {
   gap: 0.6rem;
 }
 
-.user-row-header strong {
+.user-row-header {
+  flex-wrap: wrap;
+}
+
+.user-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin-right: auto;
+}
+
+.user-row-note {
+  margin: 0.5rem 0 0;
 }
 
 .instance-access-grants {
