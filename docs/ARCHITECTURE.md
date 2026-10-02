@@ -125,14 +125,253 @@ separate service user); both booted to `running` with the original world
 (same seed) on `java17`, port rewritten to 25565, `logs/`/`backups/`
 excluded.
 
+## CurseForge modpacks
+
+`server/src/curseforge/` (`cfClient.ts`, `cfInstaller.ts`), routes in
+`routes/curseforge.routes.ts` (catalog) and `routes/instances.routes.ts`
+(`POST /instances/curseforge`, `…/curseforge/retry`,
+`PUT …/curseforge/files/:fileId`). Needs `CF_API_KEY`.
+
+**The key never reaches a modpack.** itzg's own `TYPE=AUTO_CURSEFORGE`
+would need the key in the server container permanently (it re-syncs the
+pack on every start), where any of the pack's third-party mods could read
+it. Instead:
+
+1. A short-lived **install container** (`mc-install-<id>`, label
+   `mcmgr.role=installer`, same image, same hardening, default bridge
+   network rather than `mc-net`, runs as uid 1000) runs only
+   `mc-image-helper install-curseforge --slug … --file-id …` into the
+   instance's volume, with the key in its env. It downloads the pack and
+   mods, applies the pack's overrides, drops itzg's list of known
+   client-only mods (`/image/cf-exclude-include.json`), and installs the mod
+   loader — no pack code runs. Its output goes to the instance's
+   `console.log` (the UI's install log), and it's removed afterwards.
+2. The installer leaves `.curseforge-manifest.json` in the volume with
+   `minecraftVersion` and `modLoaderId` (e.g. `forge-47.2.0`). Those field
+   names were read from mc-image-helper's own classes (`javap`), then seen
+   in a real run. The manager reads it via `getArchive` and stores an itzg
+   env (`TYPE=FORGE|NEOFORGE|FABRIC|QUILT`, `VERSION`, loader version,
+   `LEVEL`) in `server_env`, exactly like an imported server.
+3. The **server container** is created from that env, with no key and no
+   `AUTO_CURSEFORGE`. The rest of the lifecycle is the normal one.
+
+**Mods whose authors disallow automated downloads.** mc-image-helper first
+tries CurseForge's CDN for them. Only a **404** makes it give up on a file,
+skip it, fail, and write `MODS_NEED_DOWNLOAD.txt` (a padded text table whose
+last column is `https://www.curseforge.com/minecraft/mc-mods/<slug>/download/<fileId>`).
+Anything else, e.g. a 403, is a hard failure. The manager extracts the file
+ids from those URLs, looks them up (`POST /v1/mods/files`, `POST /v1/mods`)
+for names, file names and SHA-1s, and puts the instance in
+`awaiting_files` with that list in `missing_files`. Uploads are streamed to
+`DATA_DIR/curseforge-downloads/<id>/mods/`, **rejected unless the SHA-1
+matches CurseForge's** (MD5 when CurseForge lists no SHA-1; a file with
+neither is refused, since it can't be verified), and copied into the volume's `.manual-downloads/`
+before the next install attempt, which runs with
+`--downloads-repo=/data/.manual-downloads`. mc-image-helper caches API
+responses in the volume (2 days by default), so retries are fast.
+
+Restarts and deletes: install containers left over from a manager restart
+are removed on boot, and the instance goes to `error` with a retry button.
+Deleting an instance removes its install container and staged uploads.
+
+Schema: migration `0004_curseforge.sql` rebuilds the `instance` table,
+because SQLite can't change the `source`/`status` CHECK constraints in place.
+It adds `cf_mod_id`, `cf_file_id` and `missing_files`.
+`db/client.ts#runMigrations` turns foreign keys off around migrations
+(`PRAGMA foreign_keys` is ignored inside a transaction) and runs
+`foreign_key_check` afterwards. Otherwise dropping the old table would
+cascade-delete every `instance_access` grant. This was verified against a
+pre-migration database with a grant in it.
+
+Verified end to end against a local test double of the CurseForge API
+(mc-image-helper accepts `--api-base-url`; the manager's `CF_API_BASE_URL`
+feeds it). The test pack was a real Fabric 1.20.1 pack: Fabric API
+downloadable, FerriteCore marked distribution-blocked (CDN 404), plus a
+config override. The flow went create → install → `awaiting_files` with
+FerriteCore listed → wrong jar rejected by checksum → correct jar accepted
+→ continue → server running with 46 mods, `TYPE=FABRIC` and no key in its
+env. It was driven both through the API and through the UI in headless
+Chromium. **Not yet run against the real CurseForge API** (no key was
+available during development); the request shapes follow CurseForge's
+public docs and mc-image-helper's own client.
+
+## Editing server.properties
+
+`instances/serverProperties.ts`; routes `GET/PUT /instances/:id/properties`
+(instance admin). The file is read and written through Docker's archive API
+(`docker/containerFiles.ts`), so it works whether the server is running or
+not. The written file is owned by uid 1000.
+
+- **Managed keys are read-only, with the reason shown.** itzg rewrites a
+  property at startup only when its env var is set (confirmed in
+  `start-setupServerProperties`: existing files are only touched for set
+  env vars). The manager sets `ENABLE_RCON`/`RCON_PASSWORD`/`RCON_PORT` (the
+  console needs them) and, for imported/CurseForge servers, `LEVEL`. Infrared
+  routes to `:25565` on every server, so `server-port`/`server-ip` are fixed
+  too. Making these editable would only produce changes that silently
+  revert, or a server the proxy can't reach. The RCON password is masked in
+  responses.
+- **Lossless round trip:** values are kept raw (Java `\u…` escapes
+  included); unchanged lines are written back byte-for-byte; comments and
+  order are preserved. Keys are validated, and values may not contain line
+  breaks or control characters, so nothing can inject extra properties.
+- **Optimistic concurrency:** reads return a content hash and writes must
+  send it back. Minecraft itself rewrites the file at startup, so a stale
+  editor gets a 409 instead of clobbering that.
+
+Verified live: edits (including a removed key and a new one) survived
+save-and-restart through itzg's startup; managed keys stayed put despite
+attempts to change them; a stale revision and a value with a line break were
+both rejected.
+
+## Modpack updates
+
+`instances/packUpdates.ts`; routes under `/instances/:id/versions` and
+`/instances/:id/updates/*` (instance admin); columns from
+`0005_pack_updates.sql` (`auto_update`, `pack_version_name`,
+`available_version_*`, `update_checked_at`, `update_result`).
+
+**Applying an update** (manual or automatic):
+1. Stop the server.
+2. Back it up (see "Backups and restore" below). If the backup fails, the
+   server is put back as it was.
+3. Remove the container, point the row at the new version (re-resolving
+   Java: FTB from its metadata; CurseForge from the Minecraft version, unless
+   it's unchanged, which keeps an admin's explicit choice), and re-provision
+   into the same volume:
+   - **FTB:** the new `FTB_MODPACK_VERSION_ID` no longer matches itzg's
+     `.ftb-installed` marker, so its `start-deployFTBA` re-runs FTB's
+     installer with `-force` (read from the image's script).
+   - **CurseForge:** the install container runs again with the new file id.
+     mc-image-helper replaces the previous version's files using its own
+     manifest. A blocked download lands in `awaiting_files`, exactly like a
+     first install. That's why CurseForge retry/upload are open to instance
+     admins, not just superadmins.
+   The check timestamp is cleared, so the next tick re-checks: a different
+   version can have different updates (e.g. after restoring back to an old
+   one).
+
+Updates, restores and backups share one per-server lock, so they never
+overlap on a server.
+
+**Automatic updates** (`startPackUpdateScheduler`: first tick 2 minutes after
+boot, then every 5 minutes; checks are due every `PACK_UPDATE_CHECK_HOURS`).
+They only apply *release* versions on the *same Minecraft version*, and only
+to a server that's `running` with **0** players according to RCON `list`. An
+unknown player count counts as busy and is logged. If the server has a
+**time window** (`update_window_start`/`_end`/`_tz`, migration 0006), the
+tick must also fall inside it. The window is evaluated in its own IANA
+zone via `Intl` (the manager runs in UTC), may cross midnight, and is
+inclusive at the start and exclusive at the end. A Minecraft-version change
+can be irreversible for a world, so it's never automatic.
+
+Verified live with a real FTB pack (FTB Unstable 1.20: Fabric, manual
+1.2.0 → 1.3.0: FTB's installer re-ran, same world seed afterwards, backup
+taken). Also verified with a CurseForge pack via the API test double:
+`notify` and `auto` both detected 1.1.0 on the first tick, `auto` applied it
+to the empty server unattended, the new pack's files were in place, the
+admin's server.properties edits survived, and the backup held the world and
+configs but not mods. The manager must be on `mc-net` (as in docker-compose)
+for the RCON player check. A manager run on the host can't resolve
+container names, so it correctly never auto-applies.
+
+**Health-poller fix that came out of this:** promotion from `installing` to
+`running` used to search the last 50 log lines for "Done (…)!", and after a
+restart that matched the *previous* boot's line, so the server showed
+`running` instantly. It now only looks at logs since the container's
+`State.StartedAt`.
+
+## Backups and restore
+
+`instances/backups.ts`; routes `GET/POST /instances/:id/backups`,
+`POST /instances/:id/backups/:name/restore` (instance admin).
+
+- **Format:** a `.tar.gz` of the volume minus re-downloadable/regenerated
+  paths (mods, libraries, versions, logs, caches, the backups themselves),
+  plus a `.json` sidecar with the reason (`update`/`manual`/`restore`), the
+  pack version id/name, and the time. Everything is written by throwaway
+  containers (label `mcmgr.role=backup`, no network, uid 1000) mounting the
+  volume. Nothing is copied out to the manager, and listing works the same
+  way, since `getArchive` on the directory would stream every archive. The
+  newest 5 are kept.
+- **Live backups** pause saving over RCON (`save-off`, `save-all flush`, a
+  short wait, then `save-on`). RCON is retried for a few seconds, because
+  Minecraft prints "Done" a moment before its RCON listener is up.
+- **Restore:** stop → back up the current state, with the restore source
+  protected from rotation → delete exactly the top-level paths the archive
+  contains (never mods/libraries/backups) → extract → restart if it was
+  running. Deleting first matters: extracting over a newer world would mix
+  old and new region files. If the backup's recorded version differs and the
+  admin asks for it, the pack is then switched to that version, without a
+  second backup, since the volume *is* a backup at that point.
+- Backup names are validated against a strict pattern *and* must appear in
+  the listing before a restore runs.
+
+Verified live (CurseForge pack via the API double, manager on `mc-net`),
+using marker files in the world:
+- A live backup paused and resumed saving and the server kept running.
+- An update kept the world and swapped the pack files.
+- Restoring a pre-update backup with the version switch brought back the
+  old marker, removed a file created after that backup, put the pack back
+  on its old version, and kept the world seed.
+- Restoring the automatic safety backup brought the newer state back.
+- Restoring the oldest of 5 backups worked (rotation protection).
+- Retention stayed at 5, each with a sidecar.
+- A window excluding "now" deferred a pending auto-update (logged), and the
+  first tick after widening it applied the update.
+- Window logic was checked at fixed instants across BST/GMT, a window
+  crossing midnight, New York and Tokyo, and invalid inputs.
+
+## Updating the manager (`scripts/update.sh`)
+
+Git-based. The checkout must be clean, and the script refuses while a helper
+container (`mcmgr.role`: CurseForge install or pre-update backup) is
+running, unless `--force`. With the manager stopped it copies the SQLite
+files (including `-wal`/`-shm`, consistent because nothing is writing) to
+`backups/<timestamp>/` with the commit. It then fast-forwards, runs
+`apply.sh`, and health-checks from inside the container. `--rollback`
+resets the checkout to the recorded commit, rebuilds, and replaces the
+database files exactly; a stale `-wal` from the newer version would otherwise
+be replayed onto the restored database. `apply.sh` stamps the image with
+`APP_COMMIT` (with `-modified` for a dirty tree), and **Settings → About**
+shows it.
+
+Verified end to end on a throwaway stack (own compose project, ports and
+network), with a bare-repo upstream one commit ahead:
+- `--check` listed the new commit.
+- The dirty-tree and busy guards refused.
+- The update backed up, moved, rebuilt, came up healthy, and kept the data.
+- `--rollback` restored the old version *and* the old database (a user
+  created after the update was gone).
+- Updating forward again worked.
+
+## Pack artwork and the CSP
+
+The catalog UIs show pack art straight from FTB's and CurseForge's CDNs.
+`img-src` allows exactly `http/artwork.ts#ARTWORK_HOSTS`
+(`apps.modpacks.ch`, `cdn.creeper.host`, `media.forgecdn.net`), and the
+catalog clients drop artwork URLs on any other host (a few FTB packs link
+art elsewhere). Those packs show a placeholder instead of a CSP-blocked
+image, and the policy isn't widened for arbitrary hosts.
+
 ## Modpack source: FTB's own catalog, not CurseForge
+
+(Historical heading. CurseForge is now supported too, see above. FTB stays
+the zero-configuration default.)
 
 `server/src/ftb/ftbCatalogClient.ts` calls `api.modpacks.ch/public/...` — the
 same unauthenticated API that backs both the FTB App and
 https://feed-the-beast.com/modpacks/server-files/linux. No API key needed.
 Confirmed live during implementation:
-- `GET /public/modpack/search/{limit}?term=...` → `{ packs: number[] }`
-- `GET /public/modpack/{id}` → `{ id, name, synopsis, versions: [{id, name, type}, ...] }`
+- `GET /public/modpack/all` → `{ packs: number[] }` — every public pack id
+  (~90). The UI lists the whole catalog. The manager fetches every pack's
+  details (8 at a time) and caches the summaries for an hour, which takes
+  under a second cold. A failed refresh serves the stale copy.
+- `GET /public/modpack/{id}` → `{ id, name, synopsis, art, tags, installs,
+  updated, versions: [{id, name, type, updated, specs: {recommended},
+  targets: [{name, version, type}]}] }`. Each version's targets give the
+  Minecraft version, mod loader and Java version, and `specs.recommended` is
+  FTB's recommended memory, used as the default.
 
 This is community-documented rather than an officially versioned contract, so
 it could change without notice — worth a periodic sanity check.

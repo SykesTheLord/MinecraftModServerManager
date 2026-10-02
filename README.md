@@ -8,17 +8,30 @@ client sent. No custom ports, no per-server firewall rules.
 
 Everything is driven from the web UI:
 
-- **Deploy FTB modpacks** — search the [Feed The Beast](https://feed-the-beast.com)
-  catalog, pick a pack and version, choose a subdomain and memory, deploy. The
-  right Java runtime is picked automatically from the pack's own metadata.
+- **Deploy modpacks from FTB or CurseForge** — browse the whole
+  [Feed The Beast](https://feed-the-beast.com) catalog, or search
+  [CurseForge](https://www.curseforge.com/minecraft/modpacks), pick a version,
+  choose a subdomain and memory, deploy. The right Java runtime is picked
+  automatically. For CurseForge, your API key stays with the manager (never
+  inside a modpack's container), and mods whose authors block automated
+  downloads are listed for you to fetch and upload, checksum-verified.
 - **Import existing servers** — bring over a server that has been running
   natively (e.g. Forge/NeoForge/Fabric/Quilt/Paper/vanilla on an Ubuntu box),
   either pulled directly from that machine over SSH or uploaded as an archive.
   Mods, configs and the world come along; the platform and versions are
   detected for you to review before deploying.
 - **Operate them** — start/stop/restart, a live console (log tail + RCON
-  commands), crash-loop detection with the real log tail surfaced, and
-  persistent per-server console logs on disk.
+  commands), an in-browser **server.properties editor**, crash-loop
+  detection with the real log tail surfaced, and persistent per-server
+  console logs on disk.
+- **Keep packs current** — per-server update checks for FTB and CurseForge
+  packs, one-click updates or switching to any version, and optional
+  automatic updates (release versions on the same Minecraft version, applied
+  only when the server is empty and, optionally, inside a daily time window),
+  each preceded by a world backup.
+- **Back up and restore** — world/config backups before every update and on
+  demand (even while running), and one-click restore that can also switch
+  the pack back to the version the backup was taken on.
 - **Share access** — multiple users with per-server `operator` or `admin`
   roles, enforced server-side.
 
@@ -78,8 +91,17 @@ and controls Docker. From another machine, use an SSH tunnel
 `TRUST_PROXY`). Log in with the credentials from `.env` and **change the
 password straight away** under Settings.
 
-Full instructions — deploying packs, importing servers, managing access,
-logs and backups — are in [`docs/USAGE.md`](docs/USAGE.md).
+Full instructions — deploying packs, importing servers, editing properties,
+pack updates, managing access, logs and backups — are in
+[`docs/USAGE.md`](docs/USAGE.md).
+
+## Updating
+
+```bash
+./scripts/update.sh --check   # see what's new
+./scripts/update.sh           # back up the database, update, rebuild, health-check
+./scripts/update.sh --rollback backups/<timestamp>   # undo
+```
 
 ## Configuration
 
@@ -95,6 +117,8 @@ documented list):
 | `TRUST_PROXY` | Only when a reverse proxy sits in front of the UI |
 | `MC_IMAGE` | Base server image (default `itzg/minecraft-server:stable`) |
 | `IMPORT_MAX_BYTES` | Largest server that can be imported (default 64 GiB) |
+| `PACK_UPDATE_CHECK_HOURS` | How often servers check for modpack updates (default 6; 0 = never) |
+| `CF_API_KEY` | CurseForge API key ([console.curseforge.com](https://console.curseforge.com/)); CurseForge is hidden without it |
 
 ## Development
 

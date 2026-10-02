@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { allowedArtworkUrl } from "../http/artwork.js";
 
 /**
  * FTB's public modpack catalog API — the same backing data source used by the
@@ -6,35 +7,46 @@ import { z } from "zod";
  * list modpacks and their Linux server files. It is unauthenticated (no API
  * key), unlike CurseForge's CFCore API.
  *
- * This endpoint shape was confirmed live during implementation (GET
- * /public/modpack/search/{limit}?term=... returns {packs: number[]}; GET
- * /public/modpack/{id} returns {id, name, synopsis, versions: [{id, name,
- * type}, ...]}) but is community-documented rather than officially versioned
- * by FTB, so it could change without notice — worth a periodic sanity check.
+ * Endpoint shapes confirmed live: GET /public/modpack/all returns {packs:
+ * number[]} (every public pack id); GET /public/modpack/{id} returns {id,
+ * name, synopsis, art, tags, installs, updated, versions: [{id, name, type,
+ * updated, specs: {recommended}, targets: [{name, version, type}]}]}. It's
+ * community-documented rather than officially versioned by FTB, so it could
+ * change without notice — worth a periodic sanity check.
  */
 const FTB_API_BASE = "https://api.modpacks.ch/public";
 
-const modpackVersionSummarySchema = z.looseObject({
+const targetSchema = z.looseObject({
+  name: z.string(),
+  version: z.string(),
+  type: z.string().optional(),
+});
+
+const modpackVersionSchema = z.looseObject({
   id: z.number(),
   name: z.string(),
   type: z.string().optional(),
+  updated: z.number().optional(),
+  private: z.boolean().optional(),
+  specs: z.looseObject({ recommended: z.number().optional(), minimum: z.number().optional() }).nullable().optional(),
+  targets: z.array(targetSchema).default([]),
 });
 
 const modpackDetailSchema = z.looseObject({
   id: z.number(),
   name: z.string(),
   synopsis: z.string().optional().default(""),
-  versions: z.array(modpackVersionSummarySchema).default([]),
+  installs: z.number().optional().default(0),
+  updated: z.number().optional(),
+  featured: z.boolean().optional().default(false),
+  private: z.boolean().optional(),
+  art: z.array(z.looseObject({ type: z.string(), url: z.string() })).default([]),
+  tags: z.array(z.looseObject({ name: z.string() })).default([]),
+  versions: z.array(modpackVersionSchema).default([]),
 });
 
-const searchResultSchema = z.looseObject({
+const packIdListSchema = z.looseObject({
   packs: z.array(z.number()).default([]),
-});
-
-const targetSchema = z.looseObject({
-  name: z.string(),
-  version: z.string(),
-  type: z.string().optional(),
 });
 
 const versionDetailSchema = z.looseObject({
@@ -46,11 +58,28 @@ export interface ModpackSummary {
   id: number;
   name: string;
   synopsis: string;
+  installs: number;
+  /** Unix seconds. */
+  updatedAt: number | null;
+  featured: boolean;
+  artUrl: string | null;
+  tags: string[];
+  /** Of the newest version. */
+  minecraftVersion: string | null;
+  loader: string | null;
 }
 
 export interface ModpackVersionSummary {
   id: number;
   name: string;
+  type: string;
+  /** Unix seconds. */
+  updatedAt: number | null;
+  minecraftVersion: string | null;
+  loader: string | null;
+  javaVersion: string | null;
+  /** FTB's own recommendation for this version, MB. */
+  recommendedMemoryMb: number | null;
 }
 
 async function fetchJson<S extends z.ZodType>(url: string, schema: S): Promise<z.infer<S>> {
@@ -61,32 +90,99 @@ async function fetchJson<S extends z.ZodType>(url: string, schema: S): Promise<z
   return schema.parse(await res.json());
 }
 
-export async function searchModpacks(term: string, limit = 20): Promise<ModpackSummary[]> {
-  const search = await fetchJson(
-    `${FTB_API_BASE}/modpack/search/${limit}?term=${encodeURIComponent(term)}`,
-    searchResultSchema
-  );
+type ModpackDetail = z.infer<typeof modpackDetailSchema>;
 
-  const details = await Promise.all(
-    search.packs.map((id) => getModpack(id).catch(() => undefined))
-  );
+const LOADER_NAMES: Record<string, string> = { forge: "Forge", neoforge: "NeoForge", fabric: "Fabric", quilt: "Quilt" };
 
-  return details.filter((d): d is ModpackSummary & { versions: ModpackVersionSummary[] } => Boolean(d));
-}
-
-export async function getModpack(modpackId: number): Promise<ModpackSummary & { versions: ModpackVersionSummary[] }> {
-  const modpack = await fetchJson(`${FTB_API_BASE}/modpack/${modpackId}`, modpackDetailSchema);
+function summarizeVersion(v: ModpackDetail["versions"][number]): ModpackVersionSummary {
+  const target = (type: string) => v.targets.find((t) => t.type === type || t.name === type);
+  const loader = v.targets.find((t) => t.type === "modloader");
   return {
-    id: modpack.id,
-    name: modpack.name,
-    synopsis: modpack.synopsis,
-    versions: modpack.versions.map((v) => ({ id: v.id, name: v.name })),
+    id: v.id,
+    name: v.name,
+    type: v.type ?? "release",
+    updatedAt: v.updated ?? null,
+    minecraftVersion: target("minecraft")?.version ?? null,
+    loader: loader ? `${LOADER_NAMES[loader.name] ?? loader.name} ${loader.version}` : null,
+    javaVersion: target("java")?.version ?? null,
+    recommendedMemoryMb: v.specs?.recommended ?? null,
   };
 }
 
+function publicVersions(pack: ModpackDetail): ModpackVersionSummary[] {
+  return pack.versions
+    .filter((v) => !v.private)
+    .map(summarizeVersion)
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || b.id - a.id);
+}
+
+function summarizePack(pack: ModpackDetail): ModpackSummary {
+  const newest = publicVersions(pack)[0];
+  const art = pack.art.find((a) => a.type === "square") ?? pack.art.find((a) => a.type === "logo");
+  return {
+    id: pack.id,
+    name: pack.name,
+    synopsis: pack.synopsis.trim(),
+    installs: pack.installs,
+    updatedAt: pack.updated ?? null,
+    featured: pack.featured,
+    artUrl: allowedArtworkUrl(art?.url),
+    tags: pack.tags.map((t) => t.name),
+    minecraftVersion: newest?.minecraftVersion ?? null,
+    loader: newest?.loader?.split(" ")[0] ?? null,
+  };
+}
+
+async function getModpackDetail(modpackId: number): Promise<ModpackDetail> {
+  return fetchJson(`${FTB_API_BASE}/modpack/${modpackId}`, modpackDetailSchema);
+}
+
+/**
+ * The whole FTB catalog. It's small (~100 packs) but the API only lists ids,
+ * so every pack's details are fetched (a few at a time) and the result is
+ * cached for an hour; concurrent callers share one refresh.
+ */
+const CATALOG_TTL_MS = 60 * 60 * 1000;
+const DETAIL_CONCURRENCY = 8;
+let catalog: { packs: ModpackSummary[]; fetchedAt: number } | null = null;
+let refreshing: Promise<ModpackSummary[]> | null = null;
+
+async function fetchCatalog(): Promise<ModpackSummary[]> {
+  const { packs: ids } = await fetchJson(`${FTB_API_BASE}/modpack/all`, packIdListSchema);
+  const packs: ModpackSummary[] = [];
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: DETAIL_CONCURRENCY }, async () => {
+      while (next < ids.length) {
+        const id = ids[next++];
+        const detail = await getModpackDetail(id).catch(() => null);
+        if (detail && !detail.private && publicVersions(detail).length > 0) packs.push(summarizePack(detail));
+      }
+    })
+  );
+  if (packs.length === 0) throw new Error("The FTB catalog returned no usable modpacks.");
+  return packs.sort((a, b) => b.installs - a.installs);
+}
+
+export async function listAllModpacks(): Promise<ModpackSummary[]> {
+  if (catalog && Date.now() - catalog.fetchedAt < CATALOG_TTL_MS) return catalog.packs;
+  refreshing ??= fetchCatalog()
+    .then((packs) => {
+      catalog = { packs, fetchedAt: Date.now() };
+      return packs;
+    })
+    .catch((err) => {
+      if (catalog) return catalog.packs; // stale beats nothing when FTB has a blip
+      throw err;
+    })
+    .finally(() => {
+      refreshing = null;
+    });
+  return refreshing;
+}
+
 export async function listModpackVersions(modpackId: number): Promise<ModpackVersionSummary[]> {
-  const modpack = await getModpack(modpackId);
-  return modpack.versions;
+  return publicVersions(await getModpackDetail(modpackId));
 }
 
 /**

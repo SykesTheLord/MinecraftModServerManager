@@ -53,8 +53,10 @@ function scheduleNext(instanceId: string, delayMs: number): void {
  * the server directly: RCON only comes up once the server has finished
  * booting, and the manager reaches it over mc-net exactly like the console does.
  */
-async function isServerReady(containerId: string, containerName: string, rconPassword: string): Promise<boolean> {
-  const tail = await getRecentLogs(containerId, 50).catch(() => "");
+async function isServerReady(containerId: string, containerName: string, rconPassword: string, startedAt: string): Promise<boolean> {
+  // Only this boot's output: after a restart the previous boot's "Done" line
+  // is still in the container's log, and would promote it before it's up.
+  const tail = await getRecentLogs(containerId, 50, startedAt).catch(() => "");
   if (READY_LOG_MARKER.test(tail)) return true;
   return sendConsoleCommand(containerName, rconPassword, "list").then(
     () => true,
@@ -106,7 +108,10 @@ async function poll(instanceId: string): Promise<void> {
 
     if (info.State.Running) {
       let status = instance.status;
-      if (status === "installing" && (await isServerReady(instance.container_id, instance.container_name, instance.rcon_password))) {
+      if (
+        status === "installing" &&
+        (await isServerReady(instance.container_id, instance.container_name, instance.rcon_password, info.State.StartedAt))
+      ) {
         status = "running";
         instanceRepo.updateStatus(instanceId, status);
         restartBaselines.set(instanceId, info.RestartCount);

@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: server/Dockerfile
+      args:
+        APP_COMMIT: ${APP_COMMIT:-unknown}
     restart: unless-stopped
     # Localhost-only unless MANAGER_BIND says otherwise: the manager speaks
     # plain HTTP and holds the Docker socket, so it shouldn't be on a LAN or
@@ -21,6 +23,9 @@ services:
       DOCKER_NETWORK: mc-net
       MC_IMAGE: ${MC_IMAGE:-itzg/minecraft-server:stable}
       IMPORT_MAX_BYTES: ${IMPORT_MAX_BYTES:-68719476736}
+      CF_API_KEY: ${CF_API_KEY:-}
+      CF_API_BASE_URL: ${CF_API_BASE_URL:-https://api.curseforge.com}
+      PACK_UPDATE_CHECK_HOURS: ${PACK_UPDATE_CHECK_HOURS:-6}
       TRUST_PROXY: ${TRUST_PROXY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

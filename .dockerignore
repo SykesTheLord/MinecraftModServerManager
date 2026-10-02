@@ -24,6 +24,7 @@ certs
 data
 server/data
 logs
+backups
 infrared
 **/*.sqlite
 **/*.sqlite3*

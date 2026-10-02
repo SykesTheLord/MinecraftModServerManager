@@ -1,8 +1,9 @@
-import type { InstanceStatus } from "../api/types";
+import type { Instance, InstanceStatus } from "../api/types";
 
 const LABELS: Record<InstanceStatus, string> = {
   creating: "Creating",
-  installing: "Installing",
+  awaiting_files: "Needs files",
+  installing: "Starting",
   running: "Running",
   stopped: "Stopped",
   error: "Error",
@@ -11,4 +12,14 @@ const LABELS: Record<InstanceStatus, string> = {
 
 export function StatusBadge({ status }: { status: InstanceStatus }) {
   return <span className={`status-badge status-${status}`}>{LABELS[status]}</span>;
+}
+
+const SOURCE_LABELS: Record<Instance["source"], string> = {
+  ftb: "FTB",
+  curseforge: "CurseForge",
+  import: "Imported",
+};
+
+export function SourceChip({ source }: { source: Instance["source"] }) {
+  return <span className="chip">{SOURCE_LABELS[source]}</span>;
 }

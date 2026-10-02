@@ -10,6 +10,8 @@ import { attachConsoleGateway } from "./ws/consoleGateway.js";
 import { ensurePlaceholderRoute } from "./infrared/configWriter.js";
 import { loadInstanceNetworkBlocklist } from "./http/security.js";
 import { clearImportStaging, startAbandonedImportSweep } from "./imports/importJobs.js";
+import { removeOrphanedHelperContainers } from "./curseforge/cfInstaller.js";
+import { startPackUpdateScheduler } from "./instances/packUpdates.js";
 
 // Last line of defense: every known async path already handles its own
 // errors, but one missed rejection shouldn't take down the manager (and log
@@ -34,7 +36,9 @@ async function main() {
     appLogger.info({ port: env.MANAGER_PORT }, "manager listening");
   });
 
+  await removeOrphanedHelperContainers();
   await reconcileInstancesOnBoot();
+  startPackUpdateScheduler();
 }
 
 main().catch((err) => {

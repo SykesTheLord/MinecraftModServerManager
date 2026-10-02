@@ -46,29 +46,56 @@ seed the very first account.
 
 ## Deploying a modpack
 
-1. Dashboard → **New Instance**.
-2. Search for an FTB modpack by name and pick it.
-3. Pick a specific server-file version. Every version has its own required
-   Java runtime baked into FTB's own metadata — the app resolves this
-   automatically and picks a matching `itzg/minecraft-server` image tag for
-   you (see `docs/ARCHITECTURE.md` for why this matters: several older Forge
-   packs will not boot at all on the wrong Java version, and this was
-   confirmed the hard way during development).
-4. Give it a display name, a subdomain (just the label, e.g. `pack1` — the
-   base domain is appended for you), and a memory limit.
-5. Deploy. The instance starts in `installing` status — large/old modpacks
-   can take anywhere from under a minute to several minutes to first boot
-   depending on pack size and your bandwidth. Watch the live console on the
-   instance's detail page.
-6. Once it's `running`, players connect with the **normal Minecraft port**
-   or the exact subdomain, e.g. `pack1.mc.example.com` — no custom port
-   needed, no matter how many other packs are also running.
+Dashboard → **+ New server**, then:
 
-If an instance lands in `error` status, the detail page shows the actual
-tail of the container's own logs — that's almost always enough to tell you
-what went wrong (most commonly: this specific pack's Java target isn't one
-of the known image tags, or the pack itself has a broken FTB server-file
-entry).
+1. **Choose a modpack.** Two catalogs, as tabs:
+   - **Feed The Beast** — the *entire* FTB catalog is listed (it's ~90
+     packs), with artwork, Minecraft version, loader and install counts.
+     Filter by name/tag/description, narrow to a Minecraft version, sort by
+     popularity, name or last update.
+   - **CurseForge** — tens of thousands of packs, so it's a live search:
+     type to search, filter by Minecraft version and mod loader, sort, and
+     **Load more** to page further. Needs a CurseForge API key — see below.
+2. **Pick a version.** Newest first, with its Minecraft version, loader,
+   date and release/beta/alpha tag. The right Java runtime is resolved
+   automatically — from FTB's own metadata for FTB packs, from the Minecraft
+   version for CurseForge (overridable on the next step). Several older Forge
+   packs will not boot at all on the wrong Java version; see
+   `docs/ARCHITECTURE.md`.
+3. **Configure & deploy.** Name and subdomain are pre-filled from the pack
+   (the subdomain is just the label, e.g. `stoneblock` — the base domain is
+   appended), memory defaults to the pack's recommendation where FTB gives
+   one.
+
+The server starts in `Creating`/`Starting` status — big packs can take
+several minutes to download and first boot. Watch the console (or, for
+CurseForge, the install log) on its page. Once it's `Running`, players
+connect on the **normal Minecraft port** with the server's address, e.g.
+`stoneblock.mc.example.com`, however many other servers are running.
+
+If a server lands in `Error`, its page shows the real tail of its logs —
+usually enough to tell what went wrong (most commonly a Java version the
+pack doesn't run on, or a broken server-file entry upstream).
+
+### CurseForge
+
+CurseForge's API needs a key. Get a free one at
+<https://console.curseforge.com/>, put it in `.env` as `CF_API_KEY=…`, and
+re-run `./scripts/apply.sh`. Until then the CurseForge tab explains this
+and the rest of the app works as before.
+
+The key stays with the manager: each pack is downloaded and installed by a
+separate, short-lived container that is removed straight afterwards, and
+the server itself runs without the key, so a mod can't read it.
+
+**Mods that can't be downloaded automatically.** Some mod authors only
+allow downloads from CurseForge's website. When a pack includes one, the
+server goes to **Needs files** and its page lists each file with a
+**Download** link (to that exact file on CurseForge) and an **Upload file**
+button. Download each one in your browser and upload it; every upload is
+checked against CurseForge's own checksum, so only the exact file is
+accepted. Then click **Continue install**. The rest of the pack is cached in
+the server's volume, so continuing is quick.
 
 ## Importing an existing server
 
@@ -122,6 +149,101 @@ Imports that are never deployed are discarded after 24 hours (and on manager
 restart). The largest importable server is 64 GiB by default
 (`IMPORT_MAX_BYTES` in `.env`); staged files live in the manager's data
 volume until deployed, so it needs that much free space temporarily.
+
+## Editing server.properties
+
+Server page → **Server properties** tab (server admins). Every property
+is listed with a short explanation for the common ones and dropdowns for
+fixed choices (difficulty, game mode, true/false…). You can filter, edit,
+add or remove properties, then **Save**, or **Save & restart** if the server
+is running. Minecraft only reads the file at startup, so changes take effect
+after a restart. Comments and ordering in the file are kept, and values you
+didn't touch are written back exactly as they were.
+
+A few properties are read-only, each with the reason shown next to it:
+`server-port`/`server-ip`, because the shared proxy needs every server on
+25565 on all interfaces; the RCON settings, which the console depends on; and,
+for imported or CurseForge servers, `level-name`, which their configuration
+sets on every start. If the file changed after you opened it (Minecraft
+rewrites it when it starts), saving is refused rather than overwriting
+those changes. Reload and redo your edit.
+
+## Modpack updates
+
+FTB and CurseForge servers have an **Updates** tab (server admins):
+
+- **Installed version**, the **latest update** found, and **Check now**.
+- **Automatic updates**, per server:
+  - **Off** — never check.
+  - **Notify** (default) — check every `PACK_UPDATE_CHECK_HOURS` (6 by
+    default) and show "Update available" on the dashboard and the server.
+  - **Automatic** — also install it, but only when all of these hold:
+    it's a *release* (not beta/alpha), it's for the *same Minecraft version*
+    as what's installed, and the server is *running with nobody online*
+    (checked over RCON). A busy server is retried every 15 minutes, and a
+    stopped server is left alone.
+- **Other versions** — switch to any version, older or newer, including
+  across Minecraft versions. You're warned when the Minecraft version
+  changes, because worlds often can't go back to an older one.
+
+**Update window.** With **Automatic** selected you can also restrict
+installs to a daily time window, e.g. 22:00–06:00 for overnight. The window
+can cross midnight, and it's evaluated in a time zone you choose, which
+defaults to your browser's (the manager itself runs in UTC). Outside the
+window a pending update just waits, and the page says so. Checking for
+updates still happens at any time.
+
+Every update, automatic or manual, first stops the server and takes a
+backup (see below), then installs the new version into the same volume, so
+the world carries over. For CurseForge packs, a mod that needs a manual
+download sends the server to **Needs files** as on first install.
+
+## Backups and restoring
+
+Server page → **Backups** tab (server admins, every kind of server). Each
+backup holds the world, configs, `server.properties` and player data. Mods
+and libraries are left out because they're re-downloaded. Backups live
+inside the server's own volume (`.update-backups/`), and the newest **5** are
+kept.
+
+- A backup is made **automatically before every update and every restore**.
+- **Back up now** makes one on demand. A running server keeps running:
+  saving is paused (`save-off`, `save-all flush`) for the moment the
+  archive takes, then turned back on.
+- **Restore…** replaces the world and configs with a backup's. The server
+  stops, its current state is backed up first (so a restore can be undone
+  by restoring that one), the parts the backup contains are *removed and
+  then* extracted (never mixed with the newer files), and the server starts
+  again if it was running. Mods and libraries are left alone.
+- If the backup was taken on a **different pack version** (e.g. one made
+  before an update), the confirmation offers to **also switch the pack back
+  to that version**. That's recommended, because the world was saved by
+  that version's mods.
+
+## Updating the manager itself
+
+```bash
+./scripts/update.sh --check   # what's new, without changing anything
+./scripts/update.sh           # update to the latest commit of the current branch
+./scripts/update.sh --ref v1.2.0          # or to a specific tag/branch/commit
+./scripts/update.sh --rollback backups/<timestamp>   # undo an update
+```
+
+`update.sh` refuses to run while tracked files have local changes, or while a
+CurseForge install or pre-update backup is running (`--force` overrides the
+latter). It then:
+
+1. stops the manager and copies its database to `backups/<timestamp>/`
+   (along with the commit it belongs to), keeping the last 10;
+2. fast-forwards the checkout and runs `apply.sh`, which rebuilds the image.
+   Database migrations run when the new manager starts;
+3. waits for the manager to report healthy. If it doesn't, it prints the
+   manager's logs and the exact `--rollback` command.
+
+Modpack servers keep running throughout. Everyone is logged out (sessions
+live in memory), and an import that was in progress has to be started again.
+**Settings → About** shows the running version and the commit it was built
+from.
 
 ## Managing access
 

@@ -115,9 +115,19 @@ export async function extractArchiveFile(file: string, dest: string, maxBytes: n
   }
 }
 
-/** A tar of `root`'s contents, owned by the container's minecraft user, for Docker's putArchive. */
-export function packForContainer(root: string): Readable {
+/**
+ * A tar of `root`'s contents (optionally placed under `prefix/`), owned by
+ * the container's minecraft user, for Docker's putArchive.
+ */
+export function packForContainer(root: string, prefix?: string): Readable {
   return tarFs.pack(root, {
-    map: (header) => ({ ...header, uid: MINECRAFT_UID, gid: MINECRAFT_UID, uname: "minecraft", gname: "minecraft" }),
+    map: (header) => ({
+      ...header,
+      name: prefix ? `${prefix}/${header.name}` : header.name,
+      uid: MINECRAFT_UID,
+      gid: MINECRAFT_UID,
+      uname: "minecraft",
+      gname: "minecraft",
+    }),
   });
 }

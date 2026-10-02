@@ -58,6 +58,18 @@ land, add new ones as they're found. Don't let it go stale.
 
 - [x] Import natively run servers (Import Server page): chunked archive upload or SSH pull from another machine (host-key pinning, password/key auth, optional sudo), platform/version/heap/world detection, review, deploy via `putArchive` into a new volume; `scripts/export-native-server.sh` for the upload path. Verified live — see "Importing natively run servers" in `docs/ARCHITECTURE.md` (real Fabric server imported both ways, booted with its original world; malicious tar/zip entries — `..`, absolute, symlink, hardlink — confirmed contained; every platform's detection checked against its install layout; full UI flow driven in headless Chromium under the CSP).
 
+- [x] Pack discovery lists the whole FTB catalog (art, tags, MC version, loader, installs; filter/sort client-side; cached server-side), and versions show MC version/loader/date/release type with FTB's recommended memory as the default.
+- [x] CurseForge integration: catalog search (query, MC version, loader, sort, paging), version picker, install via a short-lived keyed install container so the server never holds the API key, `awaiting_files` flow with SHA-1-verified uploads and retry, cleanup on delete/restart. Verified end to end against a local CurseForge API double with a real Fabric pack (see `docs/ARCHITECTURE.md`), via API and via the UI in headless Chromium.
+- [x] UI refresh: design tokens with dark/light themes, top nav with active state, dashboard stat tiles and richer server cards (address + copy, source, memory), stepper wizard with pack grids, server page with details grid, install panel/checklist, danger zone. Checked in headless Chromium in both color schemes with zero console/CSP errors.
+
+- [x] server.properties editor (managed keys read-only with reasons, lossless writes, revision-guarded, save & restart). Verified live through itzg restarts and in the UI.
+- [x] Modpack updates: per-server off/notify/auto, update checks, one-click update / switch to any version, pre-update world backups (newest 3 at the time; now 5, see Backups below), conservative auto-apply (release, same MC version, empty server). Verified with a real FTB pack (manual 1.2.0 → 1.3.0, world kept) and a CurseForge pack via the API double (unattended auto-update).
+- [x] `scripts/update.sh` self-update with DB backup, guards, health check and `--rollback`; version/commit in Settings → About. Verified end to end on a throwaway stack incl. rollback.
+- [x] Health poller no longer promotes a restarted server to `running` from the previous boot's "Done" log line.
+
+- [x] Backups tab: list, back up now (live-safe via RCON save-off/flush), and restore (safety backup first, wipe-then-extract, optional switch back to the backup's pack version); 5 kept with metadata sidecars. Verified with marker files end to end.
+- [x] Time-of-day window for automatic updates (per server, own time zone, may cross midnight). Verified in the live scheduler (deferred outside, applied inside) and against DST/zone edge cases.
+
 ## Verified but worth re-checking periodically
 
 - [ ] FTB's `api.modpacks.ch` endpoint shapes (unofficial, community-documented — could change without notice).
@@ -79,6 +91,7 @@ land, add new ones as they're found. Don't let it go stale.
 - [ ] Node 26 becomes LTS on 2026-10-28 — move to it (Dockerfile `NODE_IMAGE`, `engines`, `@types/node`) once it does.
 - [ ] Import: only the Fabric path was booted end-to-end; Forge/NeoForge/Quilt/Paper/vanilla/custom-jar detection was checked against synthetic install layouts and the itzg env names against the image's scripts, but not booted from a real imported server of each kind. Worth doing for at least one modern Forge (1.20.1) and one legacy Forge (1.12.2) server.
 - [ ] Import: no SFTP-only / Windows source support (needs `tar` + a POSIX shell on the source machine; upload an archive instead). Staged imports don't survive a manager restart.
+- [ ] CurseForge: run once against the **real** API with a real key and a real pack (development had no key; everything was verified against a test double that mimics the API shapes mc-image-helper and the manager use). Especially worth confirming: a pack with a genuinely distribution-blocked mod produces the `awaiting_files` list.
 - [ ] Automated tests — none written yet; everything above was verified by hand against a live Docker daemon in this session, not by an automated test suite.
 
 ## Verification log (this session, against a real Docker daemon)

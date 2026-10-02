@@ -6,11 +6,17 @@ import { ensureImagePulled } from "../docker/images.js";
 import { javaMajorForMinecraftVersion, resolveMinecraftImage } from "../docker/javaImage.js";
 import { instanceRepo, type InstanceRow } from "../db/repositories/instanceRepo.js";
 import { writeInstanceRoute, removeInstanceRoute } from "../infrared/configWriter.js";
-import { startPersistingInstanceLogs, stopPersistingInstanceLogs } from "../logging/instanceLogWriter.js";
+import {
+  readPersistedLogTail,
+  startPersistingInstanceLogs,
+  stopPersistingInstanceLogs,
+} from "../logging/instanceLogWriter.js";
+import { cleanupCurseForgeInstall, installCurseForgeInstance, isInstallRunning } from "../curseforge/cfInstaller.js";
+import { getCfFile, getCfModpack } from "../curseforge/cfClient.js";
 import { startHealthPolling, stopHealthPolling } from "./healthPoller.js";
 import { appLogger } from "../logging/appLogger.js";
 import { getRecentLogs } from "../docker/logsStream.js";
-import { getModpackJavaMajorVersion } from "../ftb/ftbCatalogClient.js";
+import { getModpackJavaMajorVersion, listModpackVersions } from "../ftb/ftbCatalogClient.js";
 import { HttpError } from "../http/errors.js";
 import { prepareServerProperties, type ImportAnalysis } from "../imports/analyze.js";
 import { packForContainer } from "../imports/archive.js";
@@ -23,6 +29,16 @@ export interface CreateInstanceInput {
   ftbVersionId: number;
   ftbPackName: string;
   memoryMb: number;
+}
+
+export interface CreateCurseForgeInstanceInput {
+  name: string;
+  subdomain: string;
+  memoryMb: number;
+  modId: number;
+  fileId: number;
+  /** Java major for the image tag; null picks one from the file's Minecraft version. */
+  javaVersion: number | null;
 }
 
 export interface CreateImportedInstanceInput extends Omit<ImportedServerSettings, "levelName"> {
@@ -56,7 +72,7 @@ function assertSubdomainAvailable(subdomain: string): void {
  * volume and container, runs `beforeStart` (e.g. copying files into the
  * volume), then starts it and wires up routing, logs and health polling.
  */
-async function provisionInstance(id: string, beforeStart?: (container: Docker.Container) => Promise<void>): Promise<InstanceRow> {
+export async function provisionInstance(id: string, beforeStart?: (container: Docker.Container) => Promise<void>): Promise<InstanceRow> {
   const instance = instanceRepo.findById(id)!;
   try {
     await ensureImagePulled(instance.image);
@@ -94,6 +110,9 @@ export const instanceService = {
 
     const javaMajor = await getModpackJavaMajorVersion(input.ftbModpackId, input.ftbVersionId).catch(() => null);
     const image = resolveMinecraftImage(javaMajor);
+    const versionName = await listModpackVersions(input.ftbModpackId)
+      .then((versions) => versions.find((v) => v.id === input.ftbVersionId)?.name ?? null)
+      .catch(() => null);
 
     instanceRepo.create({
       id,
@@ -102,6 +121,7 @@ export const instanceService = {
       ftbModpackId: input.ftbModpackId,
       ftbVersionId: input.ftbVersionId,
       ftbPackName: input.ftbPackName,
+      packVersionName: versionName,
       memoryMb: input.memoryMb,
       image,
       containerName,
@@ -146,6 +166,49 @@ export const instanceService = {
       prepareServerProperties(serverDir);
       await container.putArchive(packForContainer(serverDir), { path: "/data" });
     });
+  },
+
+  /**
+   * Creates a CurseForge modpack instance. Responds as soon as the row exists:
+   * the install (downloading hundreds of mods) runs in the background — see
+   * curseforge/cfInstaller.ts — and its progress shows up in the instance's
+   * status and console log.
+   */
+  async createCurseForgeInstance(input: CreateCurseForgeInstanceInput): Promise<InstanceRow> {
+    assertSubdomainAvailable(input.subdomain);
+    const [pack, file] = await Promise.all([getCfModpack(input.modId), getCfFile(input.modId, input.fileId)]);
+    const image = resolveMinecraftImage(input.javaVersion ?? javaMajorForMinecraftVersion(file.minecraftVersion));
+
+    const id = crypto.randomUUID();
+    instanceRepo.create({
+      id,
+      name: input.name,
+      subdomain: input.subdomain,
+      ftbModpackId: 0,
+      ftbVersionId: 0,
+      ftbPackName: `${pack.name} (${file.displayName})`,
+      packVersionName: file.displayName,
+      memoryMb: input.memoryMb,
+      image,
+      containerName: `mc-${id}`,
+      volumeName: `mc-data-${id}`,
+      rconPassword: crypto.randomBytes(16).toString("hex"),
+      source: "curseforge",
+      cfModId: input.modId,
+      cfFileId: input.fileId,
+    });
+    void installCurseForgeInstance(id, (instance) => provisionInstance(instance.id).then(() => undefined));
+    return instanceRepo.findById(id)!;
+  },
+
+  /** Re-runs a CurseForge install that's waiting for manual downloads, or that failed before its server existed. */
+  async retryCurseForgeInstall(id: string): Promise<void> {
+    const instance = requireInstance(id);
+    if (instance.source !== "curseforge" || instance.container_id) {
+      throw new HttpError(409, "Only a CurseForge instance whose install hasn't completed can be re-installed.");
+    }
+    if (isInstallRunning(id)) throw new HttpError(409, "An install is already running for this instance.");
+    void installCurseForgeInstance(id, (row) => provisionInstance(row.id).then(() => undefined));
   },
 
   async startInstance(id: string): Promise<void> {
@@ -198,6 +261,8 @@ export const instanceService = {
       await container.remove().catch(() => undefined);
     }
 
+    if (instance.source === "curseforge") await cleanupCurseForgeInstall(id);
+
     if (deleteWorldData) {
       await docker.getVolume(instance.volume_name).remove().catch(() => undefined);
     }
@@ -220,7 +285,8 @@ export const instanceService = {
 
   async getRecentLogTail(id: string, lines = 200): Promise<string> {
     const instance = requireInstance(id);
-    if (!instance.container_id) return "";
+    // No server container yet: a CurseForge install's output is all there is.
+    if (!instance.container_id) return readPersistedLogTail(id, lines);
     return getRecentLogs(instance.container_id, lines);
   },
 };

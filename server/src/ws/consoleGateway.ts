@@ -7,8 +7,30 @@ import { hasInstanceRole } from "../auth/userService.js";
 import { followContainerLogs } from "../docker/logsStream.js";
 import { sendConsoleCommand } from "../rcon/rconClient.js";
 import { isCrossOriginBrowserRequest, isFromInstanceNetwork } from "../http/security.js";
+import { sessionStore } from "../auth/sessionStore.js";
 
 const ROUTE_PATTERN = /^\/ws\/instances\/([^/]+)\/console$/;
+/** How often an open console re-checks that its session and access still stand. */
+const REAUTH_INTERVAL_MS = 30_000;
+/** Close codes the browser treats as final (no reconnect): the session ended, or access was taken away. */
+export const CLOSE_SESSION_ENDED = 4401;
+export const CLOSE_ACCESS_REVOKED = 4403;
+
+/**
+ * Whether the connection's session still exists (not logged out, revoked by a
+ * password change or user deletion, or idled out) and its user still has
+ * operator access to the instance.
+ */
+function checkAccess(sessionId: string, userId: string, instanceId: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    sessionStore.get(sessionId, (err, data) => {
+      if (err || !data || (data as { userId?: string }).userId !== userId) return resolve(CLOSE_SESSION_ENDED);
+      const user = userRepo.findById(userId);
+      if (!user) return resolve(CLOSE_SESSION_ENDED);
+      resolve(hasInstanceRole(user, instanceId, "operator") ? null : CLOSE_ACCESS_REVOKED);
+    });
+  });
+}
 
 export function attachConsoleGateway(server: HttpServer, sessionMiddleware: RequestHandler): void {
   // Console commands are one line of text; ws's 100 MiB default is just a memory-exhaustion lever.
@@ -41,14 +63,21 @@ export function attachConsoleGateway(server: HttpServer, sessionMiddleware: Requ
         return;
       }
 
+      const sessionId = (req as Request).sessionID;
       wss.handleUpgrade(req, socket, head, (ws) => {
-        handleConnection(ws, instanceId);
+        handleConnection(ws, instanceId, () => checkAccess(sessionId, user.id, instanceId));
       });
     });
   });
 }
 
-function handleConnection(ws: WebSocket, instanceId: string): void {
+/**
+ * Access is checked at the handshake, but a console can stay open for hours:
+ * re-check it before every command and periodically, so logging out, a
+ * password change, user deletion or revoked access cut an open console off
+ * too, rather than leaving its RCON access usable until the tab closes.
+ */
+function handleConnection(ws: WebSocket, instanceId: string, checkStillAllowed: () => Promise<number | null>): void {
   const instance = instanceRepo.findById(instanceId);
   if (!instance || !instance.container_id) {
     ws.send(JSON.stringify({ type: "error", message: "Instance has no container yet." }));
@@ -66,7 +95,17 @@ function handleConnection(ws: WebSocket, instanceId: string): void {
   const logSubscription = followContainerLogs(instance.container_id, (line) => send({ type: "log", line }), {
     tail: 200,
   });
-  ws.on("close", () => logSubscription.stop());
+  const closeIfRevoked = async (): Promise<boolean> => {
+    const code = await checkStillAllowed();
+    if (code === null) return false;
+    ws.close(code, code === CLOSE_SESSION_ENDED ? "Session ended." : "Access revoked.");
+    return true;
+  };
+  const reauthTimer = setInterval(() => void closeIfRevoked(), REAUTH_INTERVAL_MS);
+  ws.on("close", () => {
+    clearInterval(reauthTimer);
+    logSubscription.stop();
+  });
 
   ws.on("message", (raw) => {
     let payload: { type?: string; command?: string };
@@ -75,10 +114,14 @@ function handleConnection(ws: WebSocket, instanceId: string): void {
     } catch {
       return;
     }
-    if (payload.type !== "command" || !payload.command) return;
+    if (payload.type !== "command" || typeof payload.command !== "string" || !payload.command) return;
+    const command = payload.command;
 
-    sendConsoleCommand(instance.container_name, instance.rcon_password, payload.command)
-      .then((response) => send({ type: "response", response }))
+    closeIfRevoked()
+      .then((revoked) => (revoked ? undefined : sendConsoleCommand(instance.container_name, instance.rcon_password, command)))
+      .then((response) => {
+        if (response !== undefined) send({ type: "response", response });
+      })
       .catch((err) => send({ type: "error", message: err instanceof Error ? err.message : "RCON command failed." }));
   });
 }

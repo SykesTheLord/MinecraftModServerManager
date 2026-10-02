@@ -4,6 +4,7 @@ import type { RequestHandler } from "express";
 import { docker } from "../docker/dockerClient.js";
 import { env, trustProxy } from "../config/env.js";
 import { appLogger } from "../logging/appLogger.js";
+import { ARTWORK_HOSTS } from "./artwork.js";
 
 /**
  * Baseline browser hardening for everything the manager serves. The built SPA
@@ -18,7 +19,8 @@ const SECURITY_HEADERS: Record<string, string> = {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self'",
-    "img-src 'self' data:",
+    // Modpack artwork, straight from FTB's and CurseForge's CDNs (images can't run code).
+    `img-src 'self' data: ${ARTWORK_HOSTS.join(" ")}`,
     "connect-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",

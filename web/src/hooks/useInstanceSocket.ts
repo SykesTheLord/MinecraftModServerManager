@@ -5,10 +5,17 @@ type ServerMessage =
   | { type: "response"; response: string }
   | { type: "error"; message: string };
 
+/**
+ * "ended" = the server closed normally because there's no container to follow;
+ * "denied" = the session ended or access was revoked while it was open.
+ */
+export type SocketStatus = "connecting" | "open" | "reconnecting" | "ended" | "denied";
+
 const RECONNECT_DELAY_MS = 3000;
 
 export function useInstanceSocket(instanceId: string) {
   const [lines, setLines] = useState<string[]>([]);
+  const [status, setStatus] = useState<SocketStatus>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -21,8 +28,15 @@ export function useInstanceSocket(instanceId: string) {
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws/instances/${instanceId}/console`);
       wsRef.current = ws;
 
+      ws.onopen = () => setStatus("open");
+
       ws.onmessage = (event) => {
-        const message = JSON.parse(event.data) as ServerMessage;
+        let message: ServerMessage;
+        try {
+          message = JSON.parse(event.data) as ServerMessage;
+        } catch {
+          return;
+        }
         if (message.type === "log") append(message.line);
         else if (message.type === "response") append(`> ${message.response}`);
         else if (message.type === "error") append(`[error] ${message.message}`);
@@ -33,7 +47,17 @@ export function useInstanceSocket(instanceId: string) {
       // manager restarting) is a dropped connection worth retrying. The
       // server re-sends recent history on connect, so start from a clean slate.
       ws.onclose = (event) => {
-        if (disposed || event.code === 1000) return;
+        if (disposed) return;
+        if (event.code === 1000) {
+          setStatus("ended");
+          return;
+        }
+        // 4401/4403 (see server/src/ws/consoleGateway.ts): retrying can't succeed.
+        if (event.code >= 4000 && event.code < 5000) {
+          setStatus("denied");
+          return;
+        }
+        setStatus("reconnecting");
         reconnectTimer = setTimeout(() => {
           setLines([]);
           connect();
@@ -50,10 +74,13 @@ export function useInstanceSocket(instanceId: string) {
     };
   }, [instanceId]);
 
-  const sendCommand = useCallback((command: string) => {
+  /** Whether the command was actually sent (the socket may be between reconnects). */
+  const sendCommand = useCallback((command: string): boolean => {
     const ws = wsRef.current;
-    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "command", command }));
+    if (ws?.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ type: "command", command }));
+    return true;
   }, []);
 
-  return { lines, sendCommand };
+  return { lines, status, sendCommand };
 }

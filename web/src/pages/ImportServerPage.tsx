@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { importsApi } from "../api/imports";
-import { settingsApi } from "../api/settings";
 import { errorMessage } from "../api/client";
 import { Layout } from "../components/Layout";
+import { PageHeader } from "../components/PageHeader";
+import { Tabs } from "../components/Tabs";
+import { useBaseDomain } from "../hooks/useBaseDomain";
+import { formatBytes, formatMemory, slugify, SUBDOMAIN_HINT, SUBDOMAIN_PATTERN } from "../lib/format";
 import type { ImportAnalysis, ImportJob, ServerType } from "../api/types";
 
 const MEMORY_OPTIONS = [2048, 4096, 6144, 8192, 12288, 16384];
@@ -30,12 +33,6 @@ const LOADER_FIELD: Record<ServerType, { label: string; optional: boolean } | nu
   CUSTOM: null,
 };
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-}
-
 export function ImportServerPage() {
   const [jobId, setJobId] = useState<string | null>(null);
 
@@ -55,17 +52,25 @@ export function ImportServerPage() {
   };
 
   return (
-    <Layout>
-      <h1>Import Server</h1>
-      <p className="muted">
-        Bring over a Minecraft server that has been running natively (e.g. on an Ubuntu machine): its mods, configs and
-        world are copied into a new instance, which then runs in a container like every other one here. Stop the server
-        on the old machine first, so its world is saved and not changing while it's copied.
-      </p>
+    <Layout narrow title="Import a server">
+      <Link to="/" className="back-link">
+        ← Servers
+      </Link>
+      <PageHeader
+        title="Import a server"
+        subtitle="Bring over a server that's been running natively (e.g. on an Ubuntu machine) — its mods, configs and world move into a container here."
+      />
+      <div className="callout warning">
+        <p>Stop the server on the old machine first, so its world is saved and not changing while it's copied.</p>
+      </div>
 
       {!jobId && <SourceStep onStarted={setJobId} />}
 
-      {jobId && !job && !jobError && <p>Loading...</p>}
+      {jobId && !job && !jobError && (
+        <div className="page-loading">
+          <span className="spinner" aria-label="Loading" />
+        </div>
+      )}
       {jobError && (
         <section className="card">
           <p className="error-text">{errorMessage(jobError, "Couldn't load the import.")}</p>
@@ -95,14 +100,15 @@ function SourceStep({ onStarted }: { onStarted: (jobId: string) => void }) {
   return (
     <section className="card">
       <h2>1. Where is the server?</h2>
-      <div className="tabs">
-        <button type="button" aria-pressed={tab === "ssh"} onClick={() => setTab("ssh")}>
-          Copy from another machine (SSH)
-        </button>
-        <button type="button" aria-pressed={tab === "upload"} onClick={() => setTab("upload")}>
-          Upload an archive
-        </button>
-      </div>
+      <Tabs
+        label="Import source"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "ssh", label: "Copy from another machine (SSH)" },
+          { value: "upload", label: "Upload an archive" },
+        ]}
+      />
       {tab === "ssh" ? <SshSourceForm onStarted={onStarted} /> : <UploadSourceForm onStarted={onStarted} />}
     </section>
   );
@@ -146,14 +152,17 @@ function UploadSourceForm({ onStarted }: { onStarted: (jobId: string) => void })
         />
       </label>
       {upload.isPending && file && (
-        <p>
-          <progress value={sent} max={file.size} /> {formatBytes(sent)} of {formatBytes(file.size)}
-        </p>
+        <div className="progress-row">
+          <progress value={sent} max={file.size} />
+          <span className="muted">
+            {formatBytes(sent)} of {formatBytes(file.size)} ({Math.floor((sent / Math.max(1, file.size)) * 100)}%)
+          </span>
+        </div>
       )}
       {upload.isError && <p className="error-text">{errorMessage(upload.error, "Upload failed.")}</p>}
       <div className="form-actions">
         <button type="submit" disabled={!file || upload.isPending}>
-          {upload.isPending ? "Uploading..." : "Upload"}
+          {upload.isPending ? "Uploading…" : "Upload"}
         </button>
         {upload.isPending && (
           <button type="button" className="secondary" onClick={() => abortRef.current?.abort()}>
@@ -270,14 +279,15 @@ function SshSourceForm({ onStarted }: { onStarted: (jobId: string) => void }) {
             SSH username
             <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" required />
           </label>
-          <div className="tabs">
-            <button type="button" aria-pressed={authMode === "password"} onClick={() => setAuthMode("password")}>
-              Password
-            </button>
-            <button type="button" aria-pressed={authMode === "key"} onClick={() => setAuthMode("key")}>
-              Private key
-            </button>
-          </div>
+          <Tabs
+            label="SSH authentication"
+            value={authMode}
+            onChange={setAuthMode}
+            options={[
+              { value: "password", label: "Password" },
+              { value: "key", label: "Private key" },
+            ]}
+          />
           {authMode === "password" ? (
             <label>
               Password
@@ -340,11 +350,11 @@ function SshSourceForm({ onStarted }: { onStarted: (jobId: string) => void }) {
 
       {!hostKey ? (
         <button type="submit" disabled={checkHostKey.isPending || !host.trim()}>
-          {checkHostKey.isPending ? "Connecting..." : "Check host key"}
+          {checkHostKey.isPending ? "Connecting…" : "Check host key"}
         </button>
       ) : (
         <button type="submit" disabled={!hostKeyConfirmed || start.isPending}>
-          {start.isPending ? "Starting..." : "Copy server"}
+          {start.isPending ? "Starting…" : "Copy server"}
         </button>
       )}
     </form>
@@ -358,14 +368,18 @@ function ProgressStep({ job, onCancel }: { job: ImportJob; onCancel: () => void 
       <h2>2. {receiving ? "Copying" : "Unpacking and analyzing"}</h2>
       <p className="muted">{job.label}</p>
       {receiving ? (
-        <p>
-          {formatBytes(job.receivedBytes)} received{job.source === "ssh" ? " (compressed)" : ""}
-          {job.expectedBytes ? ` of ${formatBytes(job.expectedBytes)}` : ""}...
-        </p>
+        <div className="progress-row">
+          {job.expectedBytes ? <progress value={job.receivedBytes} max={job.expectedBytes} /> : <progress />}
+          <span className="muted">
+            {formatBytes(job.receivedBytes)} received{job.source === "ssh" ? " (compressed)" : ""}
+            {job.expectedBytes ? ` of ${formatBytes(job.expectedBytes)}` : ""}
+          </span>
+        </div>
       ) : (
-        <p>
-          <progress /> This can take a few minutes for a large server.
-        </p>
+        <div className="progress-row">
+          <progress />
+          <span className="muted">This can take a few minutes for a large server.</span>
+        </div>
       )}
       <button className="secondary" onClick={onCancel}>
         Cancel
@@ -376,10 +390,14 @@ function ProgressStep({ job, onCancel }: { job: ImportJob; onCancel: () => void 
 
 function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: ImportAnalysis; onCancel: () => void }) {
   const navigate = useNavigate();
-  const { data: baseDomain } = useQuery({ queryKey: ["base-domain"], queryFn: settingsApi.baseDomain });
+  const baseDomain = useBaseDomain();
 
-  const [name, setName] = useState(analysis.motd?.replace(/§./g, "").slice(0, 60) ?? "");
-  const [subdomain, setSubdomain] = useState("");
+  const initialName = analysis.motd?.replace(/§./g, "").trim().slice(0, 60) ?? "";
+  const [name, setName] = useState(initialName);
+  // Follows the name until the subdomain is edited by hand.
+  const [subdomainEdited, setSubdomainEdited] = useState(false);
+  const [subdomainDraft, setSubdomain] = useState("");
+  const subdomain = subdomainEdited ? subdomainDraft : slugify(name);
   const [memoryMb, setMemoryMb] = useState(analysis.memoryMb ?? 4096);
   const [serverType, setServerType] = useState<ServerType>(analysis.serverType);
   const [minecraftVersion, setMinecraftVersion] = useState(analysis.minecraftVersion ?? "");
@@ -409,17 +427,18 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
     <section className="card">
       <h2>3. Review and deploy</h2>
       <p className="muted">{job.label}</p>
-      <ul>
-        <li>
-          Detected: <strong>{SERVER_TYPE_LABELS[analysis.serverType]}</strong>
+      <ul className="facts" aria-label="Detected">
+        <li className="chip accent">
+          {SERVER_TYPE_LABELS[analysis.serverType]}
           {analysis.minecraftVersion && ` ${analysis.minecraftVersion}`}
           {analysis.loaderVersion && ` (${analysis.loaderVersion})`}
         </li>
-        <li>
-          {formatBytes(analysis.totalBytes)}, {analysis.modCount} mod{analysis.modCount === 1 ? "" : "s"}
+        <li className="chip">
+          {analysis.modCount} mod{analysis.modCount === 1 ? "" : "s"}
         </li>
-        <li>
-          World: <code>{analysis.levelName}/</code> {analysis.worldFound ? "found" : "not found"}
+        <li className="chip">{formatBytes(analysis.totalBytes)}</li>
+        <li className={analysis.worldFound ? "chip" : "chip warning"}>
+          World <code>{analysis.levelName}/</code> {analysis.worldFound ? "found" : "not found"}
         </li>
       </ul>
       {analysis.warnings.length > 0 && (
@@ -443,8 +462,18 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
         <label>
           Subdomain
           <div className="subdomain-input">
-            <input value={subdomain} onChange={(e) => setSubdomain(e.target.value.toLowerCase())} required />
-            <span>.{baseDomain?.baseDomain ?? "..."}</span>
+            <input
+              value={subdomain}
+              onChange={(e) => {
+                setSubdomainEdited(true);
+                setSubdomain(e.target.value.toLowerCase());
+              }}
+              pattern={SUBDOMAIN_PATTERN}
+              title={SUBDOMAIN_HINT}
+              spellCheck={false}
+              required
+            />
+            <span>.{baseDomain ?? "…"}</span>
           </div>
         </label>
         <label>
@@ -452,7 +481,8 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
           <select value={memoryMb} onChange={(e) => setMemoryMb(Number(e.target.value))}>
             {memoryOptions.map((mb) => (
               <option key={mb} value={mb}>
-                {mb} MB{mb === analysis.memoryMb ? " (from the old server's -Xmx)" : ""}
+                {formatMemory(mb)}
+                {mb === analysis.memoryMb ? " (from the old server's -Xmx)" : ""}
               </option>
             ))}
           </select>
@@ -531,7 +561,7 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
         )}
         <div className="form-actions">
           <button type="submit" disabled={deploy.isPending || job.state === "deploying"}>
-            {deploy.isPending || job.state === "deploying" ? "Deploying (copying files)..." : "Deploy"}
+            {deploy.isPending || job.state === "deploying" ? "Deploying (copying files)…" : "Deploy"}
           </button>
           <button type="button" className="secondary" onClick={onCancel} disabled={deploy.isPending}>
             Discard import

@@ -63,3 +63,28 @@ export function stopPersistingInstanceLogs(instanceId: string): void {
   activeWriters.get(instanceId)?.stop();
   activeWriters.delete(instanceId);
 }
+
+const ANSI_ESCAPE = /\x1b\[[0-9;]*[A-Za-z]/g;
+
+/** The last lines of an instance's persisted console log (without timestamps or terminal colors) — e.g. a CurseForge install's output. */
+export function readPersistedLogTail(instanceId: string, lines = 200): string {
+  const filePath = path.join(env.LOGS_DIR, "instances", instanceId, "console.log");
+  if (!fs.existsSync(filePath)) return "";
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const { size } = fs.fstatSync(fd);
+    const length = Math.min(size, 256 * 1024);
+    const buf = Buffer.alloc(length);
+    fs.readSync(fd, buf, 0, length, size - length);
+    return buf
+      .toString("utf8")
+      .split("\n")
+      .filter(Boolean)
+      .slice(-lines)
+      .map((line) => (normalizeTimestamp(line.slice(0, line.indexOf(" "))) ? line.slice(line.indexOf(" ") + 1) : line))
+      .map((line) => line.replace(ANSI_ESCAPE, ""))
+      .join("\n");
+  } finally {
+    fs.closeSync(fd);
+  }
+}

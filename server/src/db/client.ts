@@ -12,7 +12,28 @@ export const db = new Database(path.join(env.DATA_DIR, "app.sqlite3"));
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
+/**
+ * Applies pending migrations. Foreign keys are off while they run: SQLite
+ * can't alter a CHECK constraint in place, so some migrations rebuild a
+ * table (create new → copy → drop old → rename), and dropping a parent
+ * table with foreign keys on would cascade-delete its children (e.g. every
+ * instance_access grant). The pragma is a no-op inside a transaction, hence
+ * set around the loop; integrity is re-checked before turning it back on.
+ */
 function runMigrations() {
+  db.pragma("foreign_keys = OFF");
+  try {
+    applyPendingMigrations();
+    const violations = db.pragma("foreign_key_check") as unknown[];
+    if (violations.length > 0) {
+      throw new Error(`Migration left ${violations.length} foreign key violation(s): ${JSON.stringify(violations)}`);
+    }
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
+function applyPendingMigrations() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name TEXT PRIMARY KEY,

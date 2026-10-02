@@ -27,7 +27,14 @@ fi
 # .env holds the session secret and admin password; keep it owner-only.
 chmod 600 .env 2>/dev/null || true
 
-log "Building/pulling and starting the stack"
+# Stamp the image with the commit it's built from (shown in Settings → About).
+APP_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ "$APP_COMMIT" != unknown ] && [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  APP_COMMIT="${APP_COMMIT}-modified"
+fi
+export APP_COMMIT
+
+log "Building/pulling and starting the stack (commit ${APP_COMMIT})"
 docker compose up -d --build
 
 log "Current status"

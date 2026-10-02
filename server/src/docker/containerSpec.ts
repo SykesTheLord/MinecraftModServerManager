@@ -26,6 +26,22 @@ export function containerMemoryLimitBytes(heapMb: number): number {
 }
 
 /**
+ * Restrictions shared by every container the manager runs modpack-related
+ * code in (servers, and CurseForge install containers). Modpacks are
+ * hundreds of third-party mods — treat them as untrusted code. itzg's
+ * entrypoint starts as root and drops to its unprivileged user itself (no
+ * setuid binaries involved), so blocking privilege gain is free. NET_RAW is
+ * dropped so a container can't forge packets / ARP on mc-net (e.g.
+ * impersonate the gateway address the manager trusts); the rest are simply
+ * never needed by a Minecraft server.
+ */
+export const HARDENED_HOST_CONFIG = {
+  PidsLimit: 4096, // generous for a JVM's threads, but stops a fork bomb
+  SecurityOpt: ["no-new-privileges:true"],
+  CapDrop: ["NET_RAW", "MKNOD", "AUDIT_WRITE", "SYS_CHROOT", "SETFCAP"],
+} satisfies Docker.HostConfig;
+
+/**
  * Every modpack instance runs from the same itzg/minecraft-server image
  * family; the modpack itself is selected purely via env vars (TYPE=FTBA,
  * FTB_MODPACK_ID required, FTB_MODPACK_VERSION_ID optional — defaults to
@@ -42,9 +58,10 @@ export function containerMemoryLimitBytes(heapMb: number): number {
  * Getting this wrong is not hypothetical: it's exactly what crash-looped two
  * different real FTB packs during implementation.
  *
- * Imported instances (source = 'import', see imports/) instead run whatever
- * server files were copied into their volume, with the itzg TYPE/VERSION env
- * resolved at import time and stored in `server_env`.
+ * Imported instances (source = 'import', see imports/) and CurseForge packs
+ * (source = 'curseforge', see curseforge/cfInstaller.ts) instead run whatever
+ * server files are already in their volume, with the itzg TYPE/VERSION env
+ * resolved at import/install time and stored in `server_env`.
  *
  * Deliberately no PortBindings: instances are only reachable from Infrared
  * over the internal mc-net network, never published to the host directly.
@@ -84,17 +101,9 @@ export function buildContainerConfig(
       Binds: [`${instance.volume_name}:/data`],
       NetworkMode: env.DOCKER_NETWORK,
       RestartPolicy: { Name: "unless-stopped" },
-      // Modpacks are hundreds of third-party mods — treat them as untrusted code.
+      ...HARDENED_HOST_CONFIG,
       Memory: containerMemoryLimitBytes(instance.memory_mb),
       MemorySwap: containerMemoryLimitBytes(instance.memory_mb), // == Memory: no extra swap
-      PidsLimit: 4096, // generous for a JVM's threads, but stops a fork bomb
-      // itzg's entrypoint starts as root and drops to its unprivileged user
-      // itself (no setuid binaries involved), so blocking privilege gain is
-      // free. NET_RAW is dropped so a container can't forge packets / ARP on
-      // mc-net (e.g. impersonate the gateway address the manager trusts);
-      // the rest are simply never needed by a Minecraft server.
-      SecurityOpt: ["no-new-privileges:true"],
-      CapDrop: ["NET_RAW", "MKNOD", "AUDIT_WRITE", "SYS_CHROOT", "SETFCAP"],
       // No PortBindings — only Infrared is reachable from outside mc-net.
     },
   };
@@ -103,7 +112,8 @@ export function buildContainerConfig(
 function serverTypeEnv(
   instance: Pick<InstanceRow, "ftb_modpack_id" | "ftb_version_id" | "source" | "server_env">
 ): string[] {
-  if (instance.source === "import") {
+  // Imports, and CurseForge packs once installed: run whatever platform was resolved for them.
+  if (instance.source !== "ftb") {
     const serverEnv = JSON.parse(instance.server_env ?? "{}") as Record<string, string>;
     return Object.entries(serverEnv).map(([key, value]) => `${key}=${value}`);
   }

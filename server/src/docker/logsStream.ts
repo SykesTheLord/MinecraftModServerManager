@@ -164,13 +164,16 @@ export function followContainerLogs(
   };
 }
 
-export async function getRecentLogs(containerId: string, tailLines = 200): Promise<string> {
+/** The last `tailLines` lines of a container's output — only from `sinceIso` on, if given. */
+export async function getRecentLogs(containerId: string, tailLines = 200, sinceIso?: string): Promise<string> {
   const container = docker.getContainer(containerId);
+  const since = sinceIso ? Math.floor(Date.parse(sinceIso) / 1000) : undefined;
   const buffer = (await container.logs({
     follow: false,
     stdout: true,
     stderr: true,
     tail: tailLines,
+    ...(since && Number.isFinite(since) ? { since } : {}),
   })) as unknown as Buffer;
 
   // Non-follow logs come back as a single buffer with the same 8-byte frame

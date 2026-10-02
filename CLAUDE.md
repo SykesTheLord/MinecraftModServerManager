@@ -46,6 +46,8 @@ sudo ./scripts/install.sh   # one-time: installs Docker Engine + Compose plugin
                              # (Debian/Ubuntu/Fedora/RHEL-family/Arch/openSUSE),
                              # creates .env with a generated SESSION_SECRET
 ./scripts/apply.sh          # docker compose up -d --build; safe to re-run anytime
+./scripts/update.sh         # git-based self-update: DB backup → fast-forward → apply → health check
+                             # (--check, --ref <tag>, --rollback backups/<ts>)
 ```
 
 or by hand:
@@ -128,11 +130,52 @@ branches on that instead of emitting `TYPE=FTBA`. Extraction only writes
 regular files/dirs inside the staging dir (no links) — keep it that way;
 the archive comes from another machine. See `docs/ARCHITECTURE.md`.
 
-### Modpack source: FTB's own catalog, not CurseForge
+### CurseForge modpacks (key never reaches a modpack)
+
+`curseforge/cfClient.ts` (CurseForge API, needs `CF_API_KEY`;
+`CF_API_BASE_URL` overrides the base, e.g. for a test double) and
+`curseforge/cfInstaller.ts`. A short-lived install container
+(`mc-install-<id>`, label `mcmgr.role=installer`) runs only `mc-image-helper
+install-curseforge` into the volume with the key; the server container is
+then built from the installer's `.curseforge-manifest.json`
+(`minecraftVersion`, `modLoaderId`) as a plain `TYPE=FORGE/NEOFORGE/FABRIC/
+QUILT` server — **never give a server container the key or
+`TYPE=AUTO_CURSEFORGE`**. Files whose authors block automated downloads
+(mc-image-helper only treats a CDN **404** as that) put the instance in
+`awaiting_files`; uploads are SHA-1-checked against CurseForge and fed back
+via `--downloads-repo`. See `docs/ARCHITECTURE.md` "CurseForge modpacks".
+
+### server.properties editing and modpack updates
+
+- `instances/serverProperties.ts` reads and writes `/data/server.properties`
+  via the Docker archive API (`docker/containerFiles.ts`). Keys itzg rewrites
+  from our env (RCON, plus `level-name` when `server_env` has `LEVEL`) and
+  `server-port`/`server-ip` (Infrared needs 25565) are read-only with a
+  reason. Writes are lossless and guarded by a content-hash revision.
+- `instances/packUpdates.ts`: update = stop → backup → remove container →
+  set new version → `provisionInstance` (FTB: itzg reinstalls on marker
+  mismatch) or `installCurseForgeInstance` (CurseForge). The scheduler
+  (5-minute ticks) auto-applies only release + same-Minecraft-version
+  updates, only to running servers with 0 players per RCON, and only inside
+  the server's optional time window (evaluated in its own IANA zone). Don't
+  loosen those rules casually. Updates, restores and backups share one
+  per-server lock (`withServerLock`).
+- `instances/backups.ts`: backups live in the volume (`.update-backups/`,
+  newest 5, `.json` sidecar with reason + pack version) and are made/listed/
+  restored by `mcmgr.role=backup` containers. Restore deletes the archive's
+  top-level paths *before* extracting (never mods/libraries) and backs up
+  first; live backups pause saving over RCON.
+- The health poller only looks for the "Done" line in logs since
+  `State.StartedAt` — the previous boot's line otherwise promotes restarts
+  instantly.
+
+### Modpack source: FTB's own catalog (and CurseForge)
 
 `ftb/ftbCatalogClient.ts` talks to `api.modpacks.ch/public/...`, the same
 unauthenticated API backing the FTB App and
-https://feed-the-beast.com/modpacks/server-files/linux. No API key. This is
+https://feed-the-beast.com/modpacks/server-files/linux. No API key. The UI
+lists the whole catalog (`/modpack/all`, ~90 packs; details fetched 8 at a
+time and cached 1h server-side). This is
 community-documented, not an official versioned contract — if catalog calls
 start failing, check whether the response shape has changed before assuming
 a code bug.
@@ -165,9 +208,15 @@ version's actual config format, not assumed.
 - `instance_access` — per-(user, instance) grants of `admin` or `operator`.
   Superadmins don't need rows here; they implicitly pass every check.
 - `instance` — one row per deployed modpack: FTB pack/version ids, resolved
-  `image`, `source` (`ftb`|`import`) + `server_env` (imports only),
-  `container_id`/`container_name`/`volume_name`, per-instance
-  `rcon_password`, and `status` (`creating|installing|running|stopped|error|deleting`).
+  `image`, `source` (`ftb`|`import`|`curseforge`) + `server_env` (resolved
+  itzg env for non-FTB sources), `cf_mod_id`/`cf_file_id`/`missing_files`
+  (CurseForge), `container_id`/`container_name`/`volume_name`, per-instance
+  `rcon_password`, and `status` (`creating|awaiting_files|installing|running|stopped|error|deleting`),
+  plus update tracking (`auto_update`, `pack_version_name`,
+  `available_version_*`, `update_checked_at`, `update_result`).
+  Changing a CHECK constraint means rebuilding the table (see
+  `0004_curseforge.sql`); `db/client.ts` runs migrations with foreign keys
+  off so a rebuild can't cascade-delete `instance_access`.
   Docker is the actual source of truth for runtime state — `instances/reconcile.ts`
   reconciles DB status against real container state on manager boot.
 
@@ -177,7 +226,9 @@ Enforced server-side per request, not just hidden in the UI —
 `auth/middleware.ts`'s `requireInstanceRole(minRole)` checks either
 `global_role === 'superadmin'` or a matching `instance_access` row before
 allowing any instance-scoped action. `operator` covers start/stop/restart/
-console; `admin` (per-instance) additionally covers delete/subdomain-edit.
+console; `admin` (per-instance) additionally covers delete, subdomain edit,
+server.properties, pack updates/auto-update settings, and CurseForge
+retry/manual-file upload.
 Only a superadmin can create or import instances or manage users at all. The frontend
 receives the caller's `effectiveRole` per instance in list/get responses
 (`routes/instances.routes.ts`) so the UI can gate actions without guessing.
@@ -198,7 +249,9 @@ named (`/{*splat}`); a bare `"*"` throws at startup under Express 5.
 - **Origin checks** (`http/security.ts`): non-GET `/api` requests and console
   WebSocket upgrades are rejected if a browser sent them from another origin.
   `SameSite=Lax` alone doesn't stop sibling subdomains, and doesn't apply to
-  WebSockets at all. Consequence: Vite's dev proxy must keep
+  WebSockets at all. Open consoles re-check their session and role before
+  every command and every 30s (`ws/consoleGateway.ts`), closing with
+  4401/4403, which the browser treats as final. Consequence: Vite's dev proxy must keep
   `changeOrigin: false` (see `web/vite.config.ts`).
 - **Modpack network block**: HTTP/WS from `mc-net` addresses (other than its
   gateway) is refused — modpacks are untrusted third-party code sharing that
@@ -215,7 +268,10 @@ named (`/{*splat}`); a bare `"*"` throws at startup under Express 5.
   other sessions. Sessions idle out after 12h (`rolling`); cookies are
   `Secure` automatically over HTTPS.
 - **Headers**: strict same-origin CSP (the built SPA has no inline
-  script/style — keep it that way), `frame-ancestors 'none'`, no `X-Powered-By`.
+  script/style — keep it that way; no `style={…}` in JSX), `frame-ancestors
+  'none'`, no `X-Powered-By`. `img-src` additionally allows only
+  `http/artwork.ts#ARTWORK_HOSTS` (FTB/CurseForge CDNs); the catalog clients
+  drop artwork on other hosts rather than widening the CSP.
 - **Unexpected 500s** return a generic message; details go to the log. Throw
   `HttpError` when the client should see the message.
 - **`TRUST_PROXY`** stays unset unless a reverse proxy is in front — trusting

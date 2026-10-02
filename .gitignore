@@ -32,6 +32,9 @@ logs/*
 # placeholder file in here. Docker Compose auto-creates the empty directory.
 infrared/configs/
 
+# Database backups made by scripts/update.sh
+backups/
+
 # Per-machine Docker Compose overrides (e.g. a different port bind, extra
 # mounts while debugging) — the shared definition is docker-compose.yml.
 docker-compose.override.yml

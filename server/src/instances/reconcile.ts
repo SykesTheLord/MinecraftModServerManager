@@ -19,7 +19,13 @@ export async function reconcileInstancesOnBoot(): Promise<void> {
       // The manager died mid-creation (before the container existed); nothing
       // will ever move this row forward on its own.
       if (instance.status === "creating") {
-        instanceRepo.updateStatus(instance.id, "error", "The manager restarted before this instance finished being created.");
+        instanceRepo.updateStatus(
+          instance.id,
+          "error",
+          instance.source === "curseforge"
+            ? "The manager restarted while this modpack was being installed. Retry the install."
+            : "The manager restarted before this instance finished being created."
+        );
         appLogger.warn({ instanceId: instance.id }, "reconciled interrupted creation to error on boot");
       }
       continue;

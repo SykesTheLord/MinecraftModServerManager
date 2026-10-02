@@ -8,6 +8,7 @@ import { authRouter } from "./routes/auth.routes.js";
 import { usersRouter } from "./routes/users.routes.js";
 import { instancesRouter } from "./routes/instances.routes.js";
 import { importsRouter } from "./routes/imports.routes.js";
+import { curseforgeRouter } from "./routes/curseforge.routes.js";
 import { ftbRouter } from "./routes/ftb.routes.js";
 import { settingsRouter } from "./routes/settings.routes.js";
 import { errorHandler } from "./http/errors.js";
@@ -61,6 +62,7 @@ export function createApp() {
   app.use("/api/users", usersRouter);
   app.use("/api/instances", instancesRouter);
   app.use("/api/imports", importsRouter);
+  app.use("/api/curseforge", curseforgeRouter);
   app.use("/api/ftb", ftbRouter);
   app.use("/api/settings", settingsRouter);
 

@@ -32,6 +32,8 @@ COPY --from=prod-deps /repo/node_modules ./node_modules
 COPY --from=build /repo/server/dist ./dist
 COPY --from=build /repo/web/dist ./public
 
-ENV NODE_ENV=production
+# Which commit this image was built from (scripts/apply.sh passes it); shown in Settings → About.
+ARG APP_COMMIT=unknown
+ENV NODE_ENV=production APP_COMMIT=${APP_COMMIT}
 EXPOSE 8080
 CMD ["node", "dist/index.js"]

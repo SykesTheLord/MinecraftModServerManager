@@ -18,6 +18,23 @@ const envSchema = z.object({
    */
   IMPORT_MAX_BYTES: z.coerce.number().int().positive().default(64 * 1024 ** 3),
   /**
+   * CurseForge API key (https://console.curseforge.com/), required for the
+   * CurseForge catalog — without it only FTB packs and imports are offered.
+   * Only the manager and its short-lived install containers ever see it,
+   * never a running modpack (see curseforge/cfInstaller.ts).
+   */
+  CF_API_KEY: z.string().trim().optional(),
+  /** CurseForge API base URL; only worth changing for a mirror/proxy (or a test double). */
+  CF_API_BASE_URL: z.string().url().default("https://api.curseforge.com"),
+  /**
+   * How often FTB/CurseForge servers are checked for a newer version of their
+   * pack (servers set to "auto" also get it applied when empty). 0 disables
+   * checking entirely. See instances/packUpdates.ts.
+   */
+  PACK_UPDATE_CHECK_HOURS: z.coerce.number().min(0).default(6),
+  /** Set at image build time by scripts/apply.sh; shown in Settings → About. */
+  APP_COMMIT: z.string().default("unknown"),
+  /**
    * Express "trust proxy" setting, only needed when the manager sits behind
    * a reverse proxy (e.g. for TLS). Leave unset otherwise: trusting
    * X-Forwarded-* headers from arbitrary clients would let them spoof their
