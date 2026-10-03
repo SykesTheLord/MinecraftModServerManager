@@ -9,6 +9,8 @@ const envSchema = z.object({
   DATA_DIR: z.string().min(1).default("/app/data"),
   LOGS_DIR: z.string().min(1).default("/app/logs"),
   INFRARED_CONFIG_DIR: z.string().min(1).default("/app/infrared-configs"),
+  /** Where the host user's SSH keys are mounted (read-only), for SSH imports — see imports/localKeys.ts. */
+  SSH_KEYS_PATH: z.string().min(1).default("/app/ssh-keys"),
   DOCKER_NETWORK: z.string().min(1).default("mc-net"),
   MC_IMAGE: z.string().min(1).default("itzg/minecraft-server:stable"),
   /**

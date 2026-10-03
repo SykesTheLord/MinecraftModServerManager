@@ -120,7 +120,13 @@ crosses a small threshold.
 `imports/` + `routes/imports.routes.ts` (superadmin-only) bring an existing
 server directory over — by chunked browser upload of a `.tar[.gz]`/`.zip`,
 or by an SSH pull (`sshSource.ts`: remote `tar -cz` streamed into
-extraction, host key pinned to a fingerprint the admin confirmed). Files are
+extraction, host key pinned to a fingerprint the admin confirmed). SSH auth
+can be a password, a pasted key, or one of the host user's own keys
+(`localKeys.ts`): `apply.sh` mounts that user's `~/.ssh` (or `SSH_KEYS_DIR`)
+read-only at `/app/ssh-keys`. The UI only gets names/fingerprints/public keys
+(`GET /api/imports/ssh/local-keys`), and the pull takes a key *name* that must
+be in that listing. `ssh2` is CommonJS, so take `utils` off its default export
+(a named import of it crashes at runtime even though it typechecks). Files are
 staged in `DATA_DIR/imports/<jobId>` (in-memory job registry, wiped on
 boot), analyzed (`analyze.ts` detects Forge/NeoForge/Fabric/Quilt/Paper/
 vanilla/custom jar, MC + loader version, `-Xmx`, `level-name`), reviewed in

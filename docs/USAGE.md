@@ -153,14 +153,32 @@ Two ways to get the files over:
      fingerprint shown against the one printed by running the displayed
      `ssh-keygen -lf …` command *on the old machine itself*, and only tick
      "matches" if they're identical — the transfer refuses any other key.
-  2. Log in with a password or a private key, and give the server's absolute
-     directory (e.g. `/opt/minecraft/server`).
+  2. Log in, then give the server's absolute directory (e.g.
+     `/opt/minecraft/server`). There are three ways to log in:
+     - **This host's SSH key** is the default when available. These are the
+       SSH keys of the user who runs the manager (`~/.ssh`), so if you can
+       already `ssh` from this host to the old machine, nothing else is
+       needed. Pick the key, and enter its passphrase if it has one. If the
+       old machine doesn't accept the key yet, open **Not set up on the old
+       machine yet?** and add the public key shown there to the SSH user's
+       `~/.ssh/authorized_keys`.
+     - A **password**.
+     - **Paste a private key**, for a key that isn't on this host.
   3. If the files belong to a separate service account (e.g. `minecraft`),
      tick **Read the files with sudo** — that needs passwordless sudo for
      `tar` for the SSH user, e.g. a sudoers line
      `youruser ALL=(ALL) NOPASSWD: /usr/bin/tar`.
   Credentials are held in memory only for the transfer and never stored.
   The manager container needs to be able to reach the old machine's SSH port.
+
+  **How the host's keys reach the manager.** `scripts/apply.sh`, which
+  `update.sh` also runs, shares the `~/.ssh` of the user running it (under
+  `sudo`, the user who ran `sudo`) with the manager, **read-only**. To share
+  a different folder, set `SSH_KEYS_DIR=/path` in `.env`. To share none, set
+  it empty (`SSH_KEYS_DIR=`). Private keys never leave the manager; your
+  browser only ever sees key names, fingerprints and public keys. If you
+  start the stack with `docker compose up` directly instead of `apply.sh`,
+  nothing is shared unless `.env` sets `SSH_KEYS_DIR`.
 - **Upload an archive** — a `.tar.gz`, `.tar` or `.zip` of the server
   directory, uploaded from your browser (in chunks, so multi-GB servers are
   fine). On the old machine, `scripts/export-native-server.sh

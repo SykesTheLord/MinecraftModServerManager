@@ -1,5 +1,5 @@
 import { api, ApiError } from "./client";
-import type { ImportJob, ServerType } from "./types";
+import type { ImportJob, LocalSshKey, ServerType } from "./types";
 
 export interface SshPullInput {
   host: string;
@@ -7,6 +7,8 @@ export interface SshPullInput {
   username: string;
   password?: string;
   privateKey?: string;
+  /** One of the host's own SSH keys, by file name (see localKeys). */
+  localKey?: string;
   passphrase?: string;
   remotePath: string;
   useSudo: boolean;
@@ -48,6 +50,7 @@ export const importsApi = {
   cancel: (id: string) => api.delete<void>(`/imports/${id}`),
   hostKey: (host: string, port: number) =>
     api.post<{ fingerprint: string; keyType: string }>("/imports/ssh/host-key", { host, port }),
+  localKeys: () => api.get<LocalSshKey[]>("/imports/ssh/local-keys"),
   startSsh: (input: SshPullInput) => api.post<ImportJob>("/imports/ssh", input),
   /** Starts the deploy on the server and returns at once; poll the job for the outcome. */
   deploy: (id: string, input: DeployImportInput) => api.post<ImportJob>(`/imports/${id}/deploy`, input),

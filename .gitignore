@@ -35,6 +35,10 @@ infrared/configs/
 # Database backups made by scripts/update.sh
 backups/
 
+# Private keys someone dropped in for SSH imports (see SSH_KEYS_DIR in .env.example)
+ssh-keys/*
+!ssh-keys/.gitkeep
+
 # Per-machine Docker Compose overrides (e.g. a different port bind, extra
 # mounts while debugging) — the shared definition is docker-compose.yml.
 docker-compose.override.yml

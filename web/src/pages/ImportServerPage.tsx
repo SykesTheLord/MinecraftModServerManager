@@ -7,6 +7,7 @@ import { Layout } from "../components/Layout";
 import { PageHeader } from "../components/PageHeader";
 import { Tabs } from "../components/Tabs";
 import { ImportsList } from "../components/ImportsList";
+import { CopyButton } from "../components/CopyButton";
 import { beginUpload, stopUpload, useLocalUpload } from "../lib/uploads";
 import { useBaseDomain } from "../hooks/useBaseDomain";
 import { formatBytes, formatMemory, slugify, SUBDOMAIN_HINT, SUBDOMAIN_PATTERN } from "../lib/format";
@@ -206,7 +207,13 @@ function SshSourceForm({ onStarted }: { onStarted: (jobId: string) => void }) {
   const [host, setHost] = useState("");
   const [port, setPort] = useState(22);
   const [username, setUsername] = useState("");
-  const [authMode, setAuthMode] = useState<"password" | "key">("password");
+  // The host's own SSH keys (shared read-only with the manager); used by default when there are any.
+  const { data: localKeys } = useQuery({ queryKey: ["local-ssh-keys"], queryFn: importsApi.localKeys });
+  const [chosenAuthMode, setAuthMode] = useState<"local" | "password" | "key" | null>(null);
+  const hasLocalKeys = Boolean(localKeys?.length);
+  const authMode = chosenAuthMode === "local" && !hasLocalKeys ? "password" : (chosenAuthMode ?? (hasLocalKeys ? "local" : "password"));
+  const [chosenLocalKey, setLocalKey] = useState<string | null>(null);
+  const localKey = localKeys?.find((k) => k.name === chosenLocalKey) ?? localKeys?.find((k) => !k.encrypted) ?? localKeys?.[0];
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
@@ -238,7 +245,11 @@ function SshSourceForm({ onStarted }: { onStarted: (jobId: string) => void }) {
         host: host.trim(),
         port,
         username,
-        ...(authMode === "password" ? { password } : { privateKey, passphrase: passphrase || undefined }),
+        ...(authMode === "local"
+          ? { localKey: localKey!.name, passphrase: passphrase || undefined }
+          : authMode === "password"
+            ? { password }
+            : { privateKey, passphrase: passphrase || undefined }),
         remotePath,
         useSudo,
         exclude: skipBackups ? ["backups"] : [],
@@ -304,13 +315,67 @@ function SshSourceForm({ onStarted }: { onStarted: (jobId: string) => void }) {
           <Tabs
             label="SSH authentication"
             value={authMode}
-            onChange={setAuthMode}
+            onChange={(mode) => {
+              setAuthMode(mode);
+              setPassphrase("");
+            }}
             options={[
-              { value: "password", label: "Password" },
-              { value: "key", label: "Private key" },
+              ...(hasLocalKeys ? [{ value: "local" as const, label: "This host's SSH key" }] : []),
+              { value: "password" as const, label: "Password" },
+              { value: "key" as const, label: "Paste a private key" },
             ]}
           />
-          {authMode === "password" ? (
+          {authMode === "local" && localKey ? (
+            <>
+              <label>
+                Key
+                <select
+                  value={localKey.name}
+                  onChange={(e) => {
+                    setLocalKey(e.target.value);
+                    setPassphrase("");
+                  }}
+                >
+                  {localKeys!.map((k) => (
+                    <option key={k.name} value={k.name}>
+                      {k.name}
+                      {k.type ? ` (${k.type.replace(/^ssh-/, "")})` : ""}
+                      {k.comment ? ` — ${k.comment}` : ""}
+                      {k.encrypted ? " · passphrase" : ""}
+                    </option>
+                  ))}
+                </select>
+                <span className="hint">
+                  From the SSH keys of the user who runs this manager, shared with it read-only. The private key stays on
+                  this host; it's never sent to your browser.
+                </span>
+              </label>
+              {localKey.fingerprint && <p className="fingerprint">{localKey.fingerprint}</p>}
+              {localKey.publicKey && (
+                <details>
+                  <summary className="muted">Not set up on the old machine yet?</summary>
+                  <p className="muted">
+                    Add this line to <code>~/.ssh/authorized_keys</code> of the SSH user above, on the old machine:
+                  </p>
+                  <p className="fingerprint">
+                    {localKey.publicKey} <CopyButton text={localKey.publicKey} />
+                  </p>
+                </details>
+              )}
+              {localKey.encrypted && (
+                <label>
+                  Key passphrase
+                  <input
+                    type="password"
+                    value={passphrase}
+                    onChange={(e) => setPassphrase(e.target.value)}
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+              )}
+            </>
+          ) : authMode === "password" ? (
             <label>
               Password
               <input

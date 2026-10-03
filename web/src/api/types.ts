@@ -181,6 +181,16 @@ export interface ImportAnalysis {
   warnings: string[];
 }
 
+/** One of the host user's SSH keys the manager can use for SSH imports (never the private key itself). */
+export interface LocalSshKey {
+  name: string;
+  type: string | null;
+  fingerprint: string | null;
+  publicKey: string | null;
+  comment: string;
+  encrypted: boolean;
+}
+
 export interface ImportJob {
   id: string;
   source: "upload" | "ssh";

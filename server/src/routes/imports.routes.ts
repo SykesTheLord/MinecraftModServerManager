@@ -7,6 +7,7 @@ import { SERVER_TYPES } from "../imports/analyze.js";
 import { KNOWN_JAVA_VERSIONS } from "../docker/javaImage.js";
 import { importJobs } from "../imports/importJobs.js";
 import { fetchHostKey } from "../imports/sshSource.js";
+import { assertUsableKey, listLocalKeys, readLocalKey } from "../imports/localKeys.js";
 
 /**
  * Importing an existing (natively run) server — see imports/importJobs.ts for
@@ -52,6 +53,11 @@ importsRouter.post("/ssh/host-key", async (req, res) => {
   res.json(await fetchHostKey(parse(sshTargetSchema, req.body)));
 });
 
+// The host user's SSH keys the manager can authenticate with: names, fingerprints and public keys only.
+importsRouter.get("/ssh/local-keys", (_req, res) => {
+  res.json(listLocalKeys());
+});
+
 const EXCLUDABLE_DIR = /^[A-Za-z0-9._-]+$/;
 
 const sshPullSchema = sshTargetSchema
@@ -59,6 +65,8 @@ const sshPullSchema = sshTargetSchema
     username: z.string().trim().min(1).max(64),
     password: z.string().max(1024).optional(),
     privateKey: z.string().max(16384).optional(),
+    /** One of the host's own keys (GET /ssh/local-keys), by file name. */
+    localKey: z.string().max(255).optional(),
     passphrase: z.string().max(1024).optional(),
     remotePath: z.string().trim().min(1).max(1024),
     useSudo: z.boolean().default(false),
@@ -68,10 +76,18 @@ const sshPullSchema = sshTargetSchema
       .default([]),
     hostFingerprint: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/, "Confirm the host key fingerprint first."),
   })
-  .refine((v) => v.password || v.privateKey, "Provide a password or a private key.");
+  .refine((v) => v.password || v.privateKey || v.localKey, "Provide a password, a private key, or one of this host's SSH keys.");
 
 importsRouter.post("/ssh", (req, res) => {
-  res.status(201).json(importJobs.startSshPull(parse(sshPullSchema, req.body)));
+  const { localKey, ...options } = parse(sshPullSchema, req.body);
+  // Checked here, so a missing or wrong passphrase is reported now rather than by the background copy.
+  if (localKey) {
+    options.privateKey = readLocalKey(localKey, options.passphrase);
+    options.password = undefined;
+  } else if (options.privateKey) {
+    assertUsableKey(options.privateKey, options.passphrase);
+  }
+  res.status(201).json(importJobs.startSshPull(options));
 });
 
 importsRouter.get("/", (_req, res) => {

@@ -34,6 +34,19 @@ if [ "$APP_COMMIT" != unknown ] && [ -n "$(git status --porcelain --untracked-fi
 fi
 export APP_COMMIT
 
+# SSH keys for SSH imports (mounted read-only; see SSH_KEYS_DIR in .env.example). Unless .env says
+# otherwise, share the ~/.ssh of the user running this — under sudo, the user who ran sudo.
+if ! grep -qE '^[[:space:]]*SSH_KEYS_DIR=' .env; then
+  key_user="${SUDO_USER:-$(id -un)}"
+  key_home="$(getent passwd "$key_user" | cut -d: -f6)"
+  if [ -n "$key_home" ] && [ -d "$key_home/.ssh" ]; then
+    export SSH_KEYS_DIR="$key_home/.ssh"
+  fi
+fi
+if [ -n "${SSH_KEYS_DIR:-}" ]; then
+  log "Sharing SSH keys from ${SSH_KEYS_DIR} with the manager (read-only, for SSH imports)"
+fi
+
 log "Building/pulling and starting the stack (commit ${APP_COMMIT})"
 docker compose up -d --build
 

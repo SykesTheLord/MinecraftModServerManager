@@ -26,6 +26,7 @@ server/data
 logs
 backups
 infrared
+ssh-keys
 **/*.sqlite
 **/*.sqlite3*
 

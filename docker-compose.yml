@@ -20,6 +20,7 @@ services:
       DATA_DIR: /app/data
       LOGS_DIR: /app/logs
       INFRARED_CONFIG_DIR: /app/infrared-configs
+      SSH_KEYS_PATH: /app/ssh-keys
       DOCKER_NETWORK: mc-net
       MC_IMAGE: ${MC_IMAGE:-itzg/minecraft-server:stable}
       IMPORT_MAX_BYTES: ${IMPORT_MAX_BYTES:-68719476736}
@@ -32,6 +33,9 @@ services:
       - manager-data:/app/data
       - ./logs:/app/logs
       - ./infrared/configs:/app/infrared-configs
+      # SSH keys for authenticating SSH imports, read-only. scripts/apply.sh points SSH_KEYS_DIR at
+      # the ~/.ssh of the user running it unless .env sets it; ./ssh-keys is an empty fallback.
+      - ${SSH_KEYS_DIR:-./ssh-keys}:/app/ssh-keys:ro
     networks:
       - mc-net
 
