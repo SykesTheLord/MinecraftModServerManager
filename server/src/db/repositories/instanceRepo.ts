@@ -39,6 +39,9 @@ export interface InstanceRow {
   update_window_start: string | null;
   update_window_end: string | null;
   update_window_tz: string | null;
+  /** An imported server's modpack (see migration 0009); null otherwise. */
+  pack_link: "ftb" | "curseforge" | null;
+  linked_pack_name: string | null;
   container_id: string | null;
   container_name: string;
   volume_name: string;
@@ -180,6 +183,44 @@ export const instanceRepo = {
          update_checked_at = NULL, updated_at = @now
        WHERE id = @id`
     ).run({ ...fields, id, now: new Date().toISOString() });
+  },
+
+  /**
+   * Links an imported server to the modpack (and version) it is, or unlinks it
+   * (null). Clears any update found for a previous link; a link can't
+   * auto-update (the first update converts the server, so it's done by hand).
+   */
+  setPackLink(
+    id: string,
+    link: { provider: "ftb" | "curseforge"; packId: number; packName: string; versionId: number; versionName: string } | null
+  ): void {
+    db.prepare(
+      `UPDATE instance SET
+         pack_link = @provider, linked_pack_name = @packName, pack_version_name = @versionName,
+         ftb_modpack_id = @ftbPack, ftb_version_id = @ftbVersion, cf_mod_id = @cfMod, cf_file_id = @cfFile,
+         available_version_id = NULL, available_version_name = NULL, update_checked_at = NULL, update_result = NULL,
+         auto_update = CASE WHEN auto_update = 'auto' THEN 'notify' ELSE auto_update END,
+         updated_at = @now
+       WHERE id = @id AND source = 'import'`
+    ).run({
+      id,
+      now: new Date().toISOString(),
+      provider: link?.provider ?? null,
+      packName: link?.packName ?? null,
+      versionName: link?.versionName ?? null,
+      ftbPack: link?.provider === "ftb" ? link.packId : 0,
+      ftbVersion: link?.provider === "ftb" ? link.versionId : 0,
+      cfMod: link?.provider === "curseforge" ? link.packId : null,
+      cfFile: link?.provider === "curseforge" ? link.versionId : null,
+    });
+  },
+
+  /** An imported server's first pack update: from now on it's a regular FTB/CurseForge server. */
+  convertLinkedImport(id: string): void {
+    db.prepare(
+      `UPDATE instance SET source = pack_link, pack_link = NULL, linked_pack_name = NULL, updated_at = ?
+       WHERE id = ? AND source = 'import' AND pack_link IS NOT NULL`
+    ).run(new Date().toISOString(), id);
   },
 
   updateSubdomain(id: string, subdomain: string): void {

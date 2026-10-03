@@ -21,9 +21,19 @@ import { sendConsoleCommand } from "../rcon/rconClient.js";
 export const BACKUP_DIR = "/data/.update-backups";
 export const BACKUPS_KEPT = 5;
 // Re-downloadable or regenerated on boot; the world, configs and player data are what matter.
-const BACKUP_EXCLUDES = ["./.update-backups", "./mods", "./libraries", "./versions", "./logs", "./crash-reports", "./.cache", "./.manual-downloads"];
+const BACKUP_EXCLUDES = [
+  "./.update-backups",
+  "./mods",
+  "./mods.before-pack-*",
+  "./libraries",
+  "./versions",
+  "./logs",
+  "./crash-reports",
+  "./.cache",
+  "./.manual-downloads",
+];
 /** Top-level paths a restore never deletes (the backup doesn't contain them, and the installed pack owns them). */
-const NEVER_RESTORED = [".update-backups", "mods", "libraries", "versions", ".manual-downloads"];
+const NEVER_RESTORED = [".update-backups", "mods", "mods.before-pack-*", "libraries", "versions", ".manual-downloads"];
 const NAME = /^[0-9TZ-]+-[A-Za-z0-9._-]+\.tar\.gz$/;
 
 export type BackupReason = "update" | "manual" | "restore";
@@ -75,9 +85,26 @@ function q(value: string): string {
 }
 
 function currentVersion(instance: InstanceRow): { versionId: number | null; versionName: string | null } {
-  if (instance.source === "ftb") return { versionId: instance.ftb_version_id, versionName: instance.pack_version_name };
-  if (instance.source === "curseforge") return { versionId: instance.cf_file_id, versionName: instance.pack_version_name };
+  // An imported server linked to a modpack counts as that pack's version.
+  const provider = instance.source === "import" ? instance.pack_link : instance.source;
+  if (provider === "ftb") return { versionId: instance.ftb_version_id, versionName: instance.pack_version_name };
+  if (provider === "curseforge") return { versionId: instance.cf_file_id, versionName: instance.pack_version_name };
   return { versionId: null, versionName: null };
+}
+
+/**
+ * For an imported server switching to its modpack's own files: renames its
+ * mods folder (rather than deleting it) so the imported jars can't clash with
+ * the pack's. Returns the new name, or null if there was no mods folder.
+ */
+export async function setAsideMods(instance: InstanceRow): Promise<string | null> {
+  const name = `mods.before-pack-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const output = await runInVolume(instance, `if [ -d /data/mods ]; then mv /data/mods ${q(`/data/${name}`)} && echo moved; fi`).catch(
+    (err: Error) => {
+      throw new Error(`Couldn't set the imported mods aside (${err.message})`);
+    }
+  );
+  return output.includes("moved") ? name : null;
 }
 
 /**

@@ -1531,6 +1531,10 @@ progress::-moz-progress-bar {
   color: #7d8496;
 }
 
+.console-hint {
+  margin: 0;
+}
+
 .console-input {
   display: flex;
   align-items: center;
@@ -1950,4 +1954,244 @@ details .console-log {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- Modpack preview ---------- */
+
+.pack-preview {
+  overflow: hidden;
+}
+
+.pack-preview-banner {
+  display: block;
+  width: calc(100% + 2.7rem);
+  max-height: 260px;
+  margin: -1.35rem -1.35rem 1.1rem;
+  object-fit: cover;
+  border-bottom: 1px solid var(--border);
+}
+
+.pack-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pack-preview-logo {
+  width: 64px;
+  height: 64px;
+  flex: none;
+  border-radius: var(--radius);
+  object-fit: cover;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.pack-preview-title {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.pack-preview-title h2,
+.pack-preview-title p {
+  margin: 0;
+}
+
+.pack-preview-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pack-preview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+  margin: 1rem 0 0.75rem;
+}
+
+.pack-preview-stats dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.pack-preview-stats dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.pack-preview-tags {
+  margin-bottom: 1rem;
+}
+
+.pack-preview-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pack-preview-description {
+  position: relative;
+}
+
+.pack-preview-description.collapsed {
+  max-height: 14rem;
+  overflow: hidden;
+}
+
+.pack-preview-description.collapsed::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 4rem;
+  background: linear-gradient(transparent, var(--surface));
+}
+
+.pack-preview-screenshots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.pack-preview-screenshots img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.pack-preview-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.25rem;
+  margin: 1rem 0 0;
+  font-size: 0.88rem;
+}
+
+.markdown-lite {
+  color: var(--text-2);
+  font-size: 0.92rem;
+}
+
+.markdown-lite h3,
+.markdown-lite h4 {
+  margin: 1.1rem 0 0.4rem;
+  color: var(--text);
+}
+
+.markdown-lite h3 {
+  font-size: 1rem;
+}
+
+.markdown-lite h4 {
+  font-size: 0.93rem;
+}
+
+.markdown-lite ul {
+  margin: 0 0 0.75rem;
+}
+
+/* ---------- Modpack picker / link ---------- */
+
+.picked-pack {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.picked-pack img,
+.picked-pack .thumb-placeholder {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--surface-hover);
+}
+
+.picked-pack > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.import-pack {
+  margin-bottom: 1.25rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.import-pack label.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin: 0;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.import-pack label.checkbox input {
+  margin-top: 0.2rem;
+  flex: none;
+}
+
+.import-pack .pack-picker,
+.import-pack .pack-picker-version,
+.import-pack .picked-pack {
+  margin-top: 0.9rem;
+}
+
+.pack-link {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.pack-link h3 {
+  margin-top: 0;
+}
+
+.pack-link .pack-picker,
+.pack-link .pack-picker-version {
+  margin-top: 0.75rem;
+}
+
+/* ---------- Startup question (Forge missing registry entries) ---------- */
+
+.startup-query {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface));
+}
+
+.startup-query ul {
+  margin: 0 0 1rem;
+}
+
+.startup-query ul li + li {
+  margin-top: 0.4rem;
+}
+
+.startup-query-entries {
+  margin-bottom: 0.75rem;
+}
+
+.startup-query-log {
+  height: auto;
+  max-height: 260px;
+  margin: 0 0 1rem;
+  white-space: pre-wrap;
 }

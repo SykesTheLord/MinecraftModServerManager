@@ -60,6 +60,39 @@ export interface MissingFileDetail extends MissingFile {
   pageUrl: string;
 }
 
+export type PackProvider = "ftb" | "curseforge";
+
+/** A modpack and version, as picked to link an imported server to. */
+export interface PackLinkInput {
+  provider: PackProvider;
+  packId: number;
+  versionId: number;
+}
+
+/** What the UI shows about a modpack before deploying (or linking) it. `description` is Markdown-lite text. */
+export interface PackPreview {
+  id: number;
+  name: string;
+  summary: string;
+  description: string;
+  artUrl: string | null;
+  bannerUrl: string | null;
+  screenshots: { title: string; thumbnailUrl: string; url: string }[];
+  authors: string[];
+  tags: string[];
+  downloads: number;
+  updatedAt: string | null;
+  releasedAt: string | null;
+  websiteUrl: string | null;
+  links: { name: string; url: string }[];
+}
+
+/** A question the server is waiting on before it can finish starting (Forge's missing registry entries). */
+export interface StartupQuery {
+  entries: string[];
+  excerpt: string;
+}
+
 export interface Instance {
   id: string;
   name: string;
@@ -84,6 +117,12 @@ export interface Instance {
   update_window_start: string | null;
   update_window_end: string | null;
   update_window_tz: string | null;
+  /** JSON of the itzg env an imported/CurseForge server runs with (TYPE, VERSION, …). */
+  server_env: string | null;
+  /** An imported server's modpack, if it was linked to one. */
+  pack_link: PackProvider | null;
+  linked_pack_name: string | null;
+  startupQuery: StartupQuery | null;
   updateWindowOpen: boolean;
   container_id: string | null;
   container_name: string;

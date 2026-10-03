@@ -6,6 +6,7 @@ import { stopPersistingInstanceLogs } from "../logging/instanceLogWriter.js";
 import { removeInstanceRoute } from "../infrared/configWriter.js";
 import { sendConsoleCommand } from "../rcon/rconClient.js";
 import { appLogger } from "../logging/appLogger.js";
+import { findStartupQuery, type StartupQuery } from "./startupQuery.js";
 
 const FAST_POLL_MS = 5_000; // while installing/booting (packs can take minutes to first-boot)
 const SLOW_POLL_MS = 30_000; // once running, just watching for unexpected crashes
@@ -36,6 +37,21 @@ const restartBaselines = new Map<string, number>();
 const generations = new Map<string, number>();
 let lastGeneration = 0;
 
+// A question the server is waiting on before it can finish starting (see startupQuery.ts), found in
+// this boot's log. Once answered it stays answered until the next boot, even though its lines are
+// still in the log.
+const startupQueries = new Map<string, StartupQuery>();
+const answeredQueries = new Set<string>();
+
+export function getStartupQuery(instanceId: string): StartupQuery | null {
+  return startupQueries.get(instanceId) ?? null;
+}
+
+export function markStartupQueryAnswered(instanceId: string): void {
+  startupQueries.delete(instanceId);
+  answeredQueries.add(instanceId);
+}
+
 export function startHealthPolling(instanceId: string): void {
   stopHealthPolling(instanceId);
   const generation = ++lastGeneration;
@@ -51,6 +67,8 @@ export function stopHealthPolling(instanceId: string): void {
   }
   generations.delete(instanceId);
   restartBaselines.delete(instanceId);
+  startupQueries.delete(instanceId);
+  answeredQueries.delete(instanceId);
 }
 
 function scheduleNext(instanceId: string, generation: number, delayMs: number): void {
@@ -81,6 +99,7 @@ function settle(instanceId: string, status: "error" | "stopped", lastError: stri
   instanceRepo.updateStatus(instanceId, status, lastError);
   generations.delete(instanceId);
   restartBaselines.delete(instanceId);
+  startupQueries.delete(instanceId);
   stopPersistingInstanceLogs(instanceId);
   removeInstanceRoute(instanceId);
 }
@@ -144,7 +163,18 @@ async function poll(instanceId: string, generation: number): Promise<void> {
         status === "installing" &&
         (await isServerReady(instance.container_id, instance.container_name, instance.rcon_password, info.State.StartedAt));
       if (!current()) return;
+      if (status === "installing" && !ready && !answeredQueries.has(instanceId)) {
+        const log = await getRecentLogs(instance.container_id, 300, info.State.StartedAt).catch(() => "");
+        if (!current()) return;
+        const query = findStartupQuery(log);
+        if (query && !startupQueries.has(instanceId)) {
+          appLogger.warn({ instanceId, entries: query.entries }, "server is waiting on a startup question");
+        }
+        if (query) startupQueries.set(instanceId, query);
+        else startupQueries.delete(instanceId);
+      }
       if (ready) {
+        startupQueries.delete(instanceId);
         status = "running";
         instanceRepo.updateStatus(instanceId, status);
         restartBaselines.set(instanceId, info.RestartCount);

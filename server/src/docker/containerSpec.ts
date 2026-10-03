@@ -97,6 +97,10 @@ export function buildContainerConfig(
       "mcmgr.instanceId": instance.id,
     },
     StopTimeout: STOP_TIMEOUT_SECONDS,
+    // An open stdin, so the manager can type into the server's console (docker/consoleInput.ts) when
+    // RCON isn't up yet — e.g. to answer Forge's "missing registry entries" prompt during startup.
+    OpenStdin: true,
+    StdinOnce: false,
     HostConfig: {
       Binds: [`${instance.volume_name}:/data`],
       NetworkMode: env.DOCKER_NETWORK,
@@ -117,9 +121,13 @@ function serverTypeEnv(
     const serverEnv = JSON.parse(instance.server_env ?? "{}") as Record<string, string>;
     return Object.entries(serverEnv).map(([key, value]) => `${key}=${value}`);
   }
+  // An imported server converted to its FTB pack keeps its world folder (the FTB installer may ship
+  // its own server.properties, and itzg only sets level-name when LEVEL is given).
+  const level = (JSON.parse(instance.server_env ?? "{}") as Record<string, string>).LEVEL;
   return [
     "TYPE=FTBA",
     `FTB_MODPACK_ID=${instance.ftb_modpack_id}`,
     `FTB_MODPACK_VERSION_ID=${instance.ftb_version_id}`,
+    ...(level ? [`LEVEL=${level}`] : []),
   ];
 }

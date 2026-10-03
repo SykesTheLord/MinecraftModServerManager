@@ -13,7 +13,8 @@ import {
 } from "../logging/instanceLogWriter.js";
 import { cleanupCurseForgeInstall, installCurseForgeInstance, isInstallRunning } from "../curseforge/cfInstaller.js";
 import { getCfFile, getCfModpack } from "../curseforge/cfClient.js";
-import { startHealthPolling, stopHealthPolling } from "./healthPoller.js";
+import { getStartupQuery, markStartupQueryAnswered, startHealthPolling, stopHealthPolling } from "./healthPoller.js";
+import { writeConsoleLine } from "../docker/consoleInput.js";
 import { appLogger } from "../logging/appLogger.js";
 import { getRecentLogs } from "../docker/logsStream.js";
 import { getModpackJavaMajorVersion, listModpackVersions } from "../ftb/ftbCatalogClient.js";
@@ -21,6 +22,7 @@ import { HttpError } from "../http/errors.js";
 import { prepareServerProperties, type ImportAnalysis } from "../imports/analyze.js";
 import { packForContainer } from "../imports/archive.js";
 import { buildImportedServerEnv, importedServerLabel, type ImportedServerSettings } from "../imports/serverEnv.js";
+import type { PackLink } from "./packUpdates.js";
 
 export interface CreateInstanceInput {
   name: string;
@@ -47,6 +49,8 @@ export interface CreateImportedInstanceInput extends Omit<ImportedServerSettings
   memoryMb: number;
   /** Java major for the image tag; null picks one from the Minecraft version. */
   javaVersion: number | null;
+  /** The modpack (and version) this server is, if the admin said — see instanceRepo.setPackLink. */
+  packLink?: PackLink | null;
 }
 
 const SUBDOMAIN_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -165,6 +169,7 @@ export const instanceService = {
       source: "import",
       serverEnv,
     });
+    if (input.packLink) instanceRepo.setPackLink(id, input.packLink);
 
     return provisionInstance(id, async (container) => {
       prepareServerProperties(serverDir);
@@ -219,20 +224,49 @@ export const instanceService = {
     const instance = requireInstance(id);
     if (!instance.container_id) throw new HttpError(409, "Instance has no container yet.");
     if (instance.status === "stopping") throw new HttpError(409, "The server is still stopping — start it again once it has stopped.");
+    let containerId = instance.container_id;
+    // Containers made before console input existed have no stdin to type into: recreate them from the
+    // current spec (everything that matters is in the volume) the next time they start from stopped.
+    const info = await docker.getContainer(containerId).inspect().catch(() => null);
+    if (info && !info.State.Running && (!info.Config.OpenStdin || info.Config.StdinOnce)) {
+      await docker.getContainer(containerId).remove({ force: true });
+      await ensureImagePulled(instance.image);
+      containerId = (await docker.createContainer(buildContainerConfig(instance))).id;
+      instanceRepo.setContainerId(id, containerId);
+      appLogger.info({ instanceId: id }, "recreated container with console input");
+    }
     // The DB can lag behind Docker (e.g. `unless-stopped` relaunched a
     // container the health poller had already marked as errored), so
     // "already started" (304) just means there's nothing to do but resume
     // tracking it.
     await docker
-      .getContainer(instance.container_id)
+      .getContainer(containerId)
       .start()
       .catch((err: { statusCode?: number }) => {
         if (err?.statusCode !== 304) throw err;
       });
     instanceRepo.updateStatus(id, "installing");
     writeInstanceRoute(id, instance.subdomain, instance.container_name);
-    startPersistingInstanceLogs(id, instance.container_id);
+    startPersistingInstanceLogs(id, containerId);
     startHealthPolling(id);
+  },
+
+  /**
+   * Answers the question a server is waiting on before it can finish starting
+   * (Forge's missing-registry-entries prompt). "confirm" removes those entries
+   * from the world and lets it carry on; "cancel" aborts startup — and then
+   * stops the server, or Docker's restart policy would just boot it back into
+   * the same question.
+   */
+  async answerStartupQuery(id: string, answer: "confirm" | "cancel"): Promise<void> {
+    const instance = requireInstance(id);
+    if (!instance.container_id || !getStartupQuery(id)) throw new HttpError(409, "This server isn't waiting on a question.");
+    await writeConsoleLine(instance.container_id, `fml ${answer}`);
+    markStartupQueryAnswered(id);
+    appLogger.info({ instanceId: id, answer }, "answered startup question");
+    if (answer === "cancel") {
+      instanceService.stopInstance(id).catch((err: unknown) => appLogger.error({ err, instanceId: id }, "stop after cancel failed"));
+    }
   },
 
   /**

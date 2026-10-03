@@ -244,7 +244,12 @@ export async function installCurseForgeInstance(
         serverType: loader.serverType,
         minecraftVersion: result.manifest.minecraftVersion,
         loaderVersion: loader.loaderVersion,
-        levelName: result.manifest.levelName || "world",
+        // A pack's own level name, else the world folder the server already had (an imported server
+        // converted to its CurseForge pack), else Minecraft's default.
+        levelName:
+          result.manifest.levelName ||
+          (JSON.parse(instance.server_env ?? "{}") as Record<string, string>).LEVEL ||
+          "world",
       },
       []
     );

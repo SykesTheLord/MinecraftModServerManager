@@ -13,7 +13,7 @@ import { appLogger } from "../logging/appLogger.js";
 import { stopPersistingInstanceLogs } from "../logging/instanceLogWriter.js";
 import { sendConsoleCommand } from "../rcon/rconClient.js";
 import { stopHealthPolling } from "./healthPoller.js";
-import { backupVolume, extractBackup, pauseSaving, requireBackup } from "./backups.js";
+import { backupVolume, extractBackup, pauseSaving, requireBackup, setAsideMods } from "./backups.js";
 import { instanceService, provisionInstance } from "./instanceService.js";
 
 /**
@@ -99,12 +99,46 @@ export function isWithinUpdateWindow(instance: InstanceRow, now = new Date()): b
   return start < end ? local >= start && local < end : local >= start || local < end;
 }
 
+/**
+ * Which modpack a server follows: its own source for FTB/CurseForge servers,
+ * or — for an imported server — the pack it was linked to. Null if none.
+ */
+export function packProvider(instance: Pick<InstanceRow, "source" | "pack_link">): "ftb" | "curseforge" | null {
+  if (instance.source === "ftb" || instance.source === "curseforge") return instance.source;
+  return instance.source === "import" ? instance.pack_link : null;
+}
+
+export interface PackLink {
+  provider: "ftb" | "curseforge";
+  packId: number;
+  packName: string;
+  versionId: number;
+  versionName: string;
+}
+
+/**
+ * Checks that a pack and version exist (with the provider's own names for
+ * them), for linking an imported server to the modpack it is.
+ */
+export async function resolvePackLink(provider: "ftb" | "curseforge", packId: number, versionId: number): Promise<PackLink> {
+  if (provider === "ftb") {
+    const [packs, versions] = await Promise.all([listAllModpacks(), listModpackVersions(packId)]);
+    const pack = packs.find((p) => p.id === packId);
+    const version = versions.find((v) => v.id === versionId);
+    if (!pack || !version) throw new HttpError(404, "That FTB modpack or version doesn't exist.");
+    return { provider, packId, packName: pack.name, versionId, versionName: version.name };
+  }
+  const [pack, file] = await Promise.all([getCfModpack(packId), getCfFile(packId, versionId)]);
+  return { provider, packId, packName: pack.name, versionId, versionName: file.displayName };
+}
+
 function updatable(instance: InstanceRow): boolean {
-  return instance.source === "ftb" || instance.source === "curseforge";
+  return packProvider(instance) !== null;
 }
 
 function currentVersionId(instance: InstanceRow): number | null {
-  return instance.source === "ftb" ? instance.ftb_version_id : instance.cf_file_id;
+  const provider = packProvider(instance);
+  return provider === "ftb" ? instance.ftb_version_id : provider === "curseforge" ? instance.cf_file_id : null;
 }
 
 /**
@@ -113,7 +147,8 @@ function currentVersionId(instance: InstanceRow): number | null {
  * an admin's explicit force-refresh — fetches it again. FTB's is always live.
  */
 export async function listPackVersions(instance: InstanceRow, options: { refresh?: boolean } = {}): Promise<PackVersionOption[]> {
-  if (instance.source === "ftb") {
+  const provider = packProvider(instance);
+  if (provider === "ftb") {
     return (await listModpackVersions(instance.ftb_modpack_id)).map((v) => ({
       id: v.id,
       name: v.name,
@@ -122,7 +157,7 @@ export async function listPackVersions(instance: InstanceRow, options: { refresh
       release: v.type === "release",
     }));
   }
-  if (instance.source === "curseforge" && instance.cf_mod_id) {
+  if (provider === "curseforge" && instance.cf_mod_id) {
     return (await listCfModpackFiles(instance.cf_mod_id, options)).map((f) => ({
       id: f.id,
       name: f.displayName,
@@ -137,7 +172,7 @@ export async function listPackVersions(instance: InstanceRow, options: { refresh
 async function findCurrent(instance: InstanceRow, versions: PackVersionOption[]): Promise<PackVersionOption | null> {
   const id = currentVersionId(instance);
   const found = versions.find((v) => v.id === id);
-  if (found || instance.source !== "curseforge" || !id) return found ?? null;
+  if (found || packProvider(instance) !== "curseforge" || !id) return found ?? null;
   // Older than the newest-100 window the file list covers.
   const file = await getCfFile(instance.cf_mod_id!, id).catch(() => null);
   return file
@@ -160,7 +195,14 @@ export async function findUpdate(instance: InstanceRow, options: { refresh?: boo
 export async function checkForUpdate(instanceId: string, options: { refresh?: boolean } = {}): Promise<InstanceRow> {
   const instance = instanceRepo.findById(instanceId);
   if (!instance) throw new HttpError(404, "Instance not found.");
-  if (!updatable(instance)) throw new HttpError(400, "Only FTB and CurseForge servers can be updated.");
+  if (!updatable(instance)) {
+    throw new HttpError(
+      400,
+      instance.source === "import"
+        ? "Link this server to the modpack it is first (Updates tab)."
+        : "Only FTB and CurseForge servers can be updated."
+    );
+  }
   const available = await findUpdate(instance, options);
   instanceRepo.setUpdateCheck(instanceId, available ? { id: available.id, name: available.name } : null);
   return instanceRepo.findById(instanceId)!;
@@ -178,7 +220,8 @@ async function playersOnline(instance: InstanceRow): Promise<number | null> {
 }
 
 async function packDisplayName(instance: InstanceRow): Promise<string> {
-  if (instance.source === "curseforge") return (await getCfModpack(instance.cf_mod_id!)).name;
+  if (packProvider(instance) === "curseforge") return (await getCfModpack(instance.cf_mod_id!)).name;
+  if (instance.linked_pack_name) return instance.linked_pack_name;
   const pack = (await listAllModpacks().catch(() => [])).find((p) => p.id === instance.ftb_modpack_id);
   return pack?.name ?? instance.ftb_pack_name.replace(/\s*\([^)]*\)$/, "");
 }
@@ -201,11 +244,14 @@ async function applyPackUpdateLocked(
   const instance = instanceRepo.findById(instanceId);
   try {
     if (!instance) throw new HttpError(404, "Instance not found.");
-    if (!updatable(instance)) throw new HttpError(400, "Only FTB and CurseForge servers can be updated.");
+    const provider = packProvider(instance);
+    if (!provider) throw new HttpError(400, "Only FTB and CurseForge servers (or imported servers linked to one) can be updated.");
     if (instance.status === "stopping") throw new HttpError(409, "The server is stopping — try again once it has stopped.");
     if (instance.status === "creating" || isInstallRunning(instanceId)) {
       throw new HttpError(409, "The server is still being installed.");
     }
+    // An imported server's first update switches it to running the pack itself.
+    const converting = instance.source === "import";
 
     const versions = await listPackVersions(instance);
     const target = versions.find((v) => v.id === versionId);
@@ -218,7 +264,7 @@ async function applyPackUpdateLocked(
     const current = await findCurrent(instance, versions);
     const sameMinecraft = current?.minecraftVersion === target.minecraftVersion;
     const image =
-      instance.source === "ftb"
+      provider === "ftb"
         ? resolveMinecraftImage(await getModpackJavaMajorVersion(instance.ftb_modpack_id, target.id).catch(() => null))
         : sameMinecraft
           ? instance.image // keeps a Java version the admin picked
@@ -238,9 +284,12 @@ async function applyPackUpdateLocked(
     const old = instance.container_id ? docker.getContainer(instance.container_id) : null;
     await old?.stop({ t: STOP_TIMEOUT_SECONDS }).catch(() => undefined);
     let backupName: string | null = null;
+    let setAside: string | null = null;
     try {
       // A restore that switches versions has just backed up, and the volume now *is* a backup.
       if (options.backup) backupName = await backupVolume(instance, "update", `before-${fromName}`);
+      // The pack brings its own mods; the imported ones are kept, renamed, rather than left to clash with them.
+      if (converting) setAside = await setAsideMods(instance);
     } catch (err) {
       // Nothing has changed yet: put the server back the way it was.
       instanceRepo.updateStatus(instanceId, old ? "stopped" : "error", old ? null : (err as Error).message);
@@ -249,6 +298,7 @@ async function applyPackUpdateLocked(
     }
     await old?.remove().catch(() => undefined);
 
+    if (converting) instanceRepo.convertLinkedImport(instanceId);
     instanceRepo.setPackVersion(instanceId, {
       versionId: target.id,
       versionName: target.name,
@@ -258,10 +308,13 @@ async function applyPackUpdateLocked(
     });
     const how = trigger === "auto" ? "automatically" : trigger === "restore" ? "to match a restored backup" : "manually";
     const backupNote = backupName ? ` Backup: ${backupName}` : "";
-    const prefix = options.note ? `${options.note} ` : "";
+    const conversionNote = converting
+      ? `It now runs ${packName}'s own files${setAside ? `; the imported mods are kept in ${setAside}` : ""}. `
+      : "";
+    const prefix = `${options.note ? `${options.note} ` : ""}${conversionNote}`;
     const done = `${prefix}Updated from ${fromName} to ${target.name} (${how}, ${new Date().toISOString()}).${backupNote}`;
 
-    if (instance.source === "ftb") {
+    if (provider === "ftb") {
       await provisionInstance(instanceId);
       instanceRepo.setUpdateResult(instanceId, done);
     } else {
@@ -381,6 +434,7 @@ async function tick(): Promise<void> {
     const intervalMs = env.PACK_UPDATE_CHECK_HOURS * 3600 * 1000;
     for (const instance of instanceRepo.list()) {
       if (!updatable(instance) || instance.auto_update === "off") continue;
+      // A linked imported server is only checked: its first update converts it, so that's done by hand.
       let row = instance;
       const due = !row.update_checked_at || Date.now() - Date.parse(row.update_checked_at) >= intervalMs;
       if (due) {
@@ -389,7 +443,9 @@ async function tick(): Promise<void> {
           return row;
         });
       }
-      if (row.auto_update !== "auto" || !row.available_version_id || row.status !== "running" || busy.has(row.id)) continue;
+      if (row.auto_update !== "auto" || row.source === "import" || !row.available_version_id || row.status !== "running" || busy.has(row.id)) {
+        continue;
+      }
       if (!isWithinUpdateWindow(row)) {
         appLogger.info(
           { instanceId: row.id, update: row.available_version_name, window: `${row.update_window_start}-${row.update_window_end} ${row.update_window_tz}` },

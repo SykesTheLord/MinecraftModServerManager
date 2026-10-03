@@ -2,6 +2,8 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 import { HttpError } from "../http/errors.js";
 import { allowedArtworkUrl } from "../http/artwork.js";
+import type { PackPreview } from "../catalog/packPreview.js";
+import { htmlToMarkdownLite } from "./htmlToMarkdownLite.js";
 
 /**
  * CurseForge's official API ("Eternal"/CFCore, https://docs.curseforge.com/rest-api/).
@@ -47,6 +49,11 @@ const modSchema = z.looseObject({
   latestFilesIndexes: z
     .array(z.looseObject({ gameVersion: z.string(), modLoader: z.number().nullable().optional() }))
     .default([]),
+  // For the preview.
+  screenshots: z
+    .array(z.looseObject({ title: z.string().nullable().optional(), thumbnailUrl: z.string(), url: z.string() }))
+    .default([]),
+  dateReleased: z.string().nullable().optional(),
 });
 
 const fileSchema = z.looseObject({
@@ -305,6 +312,40 @@ async function getCfFilesUncached(fileIds: number[]): Promise<CfFileDetail[]> {
     sha1: f.hashes.find((h) => h.algo === 1)?.value.toLowerCase() ?? null,
     md5: f.hashes.find((h) => h.algo === 2)?.value.toLowerCase() ?? null,
   }));
+}
+
+/** Everything the UI shows about one pack before it's deployed: screenshots and the long description too. */
+export function getCfModpackPreview(modId: number): Promise<PackPreview> {
+  return cached(`preview:${modId}`, CACHE_TTL_MS.modpack, async () => {
+    const [modBody, descriptionBody] = await Promise.all([
+      cfFetch(`/v1/mods/${modId}`),
+      cfFetch(`/v1/mods/${modId}/description`).catch(() => ({ data: "" })),
+    ]);
+    const mod = z.looseObject({ data: modSchema }).parse(modBody).data;
+    const html = z.looseObject({ data: z.string().catch("") }).parse(descriptionBody).data;
+    const summary = summarizeMod(mod);
+    const screenshots = mod.screenshots.flatMap((s) => {
+      const thumbnailUrl = allowedArtworkUrl(s.thumbnailUrl);
+      const url = allowedArtworkUrl(s.url);
+      return thumbnailUrl && url ? [{ title: s.title ?? "", thumbnailUrl, url }] : [];
+    });
+    return {
+      id: mod.id,
+      name: mod.name,
+      summary: mod.summary,
+      description: htmlToMarkdownLite(html),
+      artUrl: summary.logoUrl,
+      bannerUrl: screenshots[0]?.url ?? null,
+      screenshots,
+      authors: summary.authors,
+      tags: summary.categories,
+      downloads: mod.downloadCount,
+      updatedAt: mod.dateModified ?? null,
+      releasedAt: mod.dateReleased ?? null,
+      websiteUrl: summary.websiteUrl,
+      links: [],
+    };
+  });
 }
 
 /** Bulk mod lookup. */

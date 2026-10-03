@@ -4,6 +4,8 @@ import { instancesApi } from "../api/instances";
 import { errorMessage } from "../api/client";
 import type { AutoUpdateMode, Instance, PackVersionOption } from "../api/types";
 import { timeAgo } from "../lib/format";
+import { useCurrentUser } from "../hooks/useCurrentUser";
+import { PackPicker, type PickedPack } from "./PackPicker";
 
 const MODES: { value: AutoUpdateMode; label: string; help: string }[] = [
   { value: "off", label: "Off", help: "Never check for updates." },
@@ -15,8 +17,107 @@ const MODES: { value: AutoUpdateMode; label: string; help: string }[] = [
   },
 ];
 
-export function PackUpdatesPanel({ instance }: { instance: Instance }) {
+function useOnInstance(instanceId: string) {
   const queryClient = useQueryClient();
+  return (updated: Instance) => {
+    queryClient.setQueryData(["instance", instanceId], updated);
+    void queryClient.invalidateQueries({ queryKey: ["instances"] });
+    void queryClient.invalidateQueries({ queryKey: ["versions", instanceId] });
+  };
+}
+
+/**
+ * The Updates tab. An imported server first has to be linked to the modpack
+ * it is (platform admins only) before there's anything to check.
+ */
+export function PackUpdatesPanel({ instance }: { instance: Instance }) {
+  if (instance.source !== "import") return <PackUpdates instance={instance} />;
+  return (
+    <div>
+      <PackLinkSection instance={instance} />
+      {instance.pack_link && <PackUpdates instance={instance} />}
+    </div>
+  );
+}
+
+function PackLinkSection({ instance }: { instance: Instance }) {
+  const { data: me } = useCurrentUser();
+  const canLink = me?.globalRole === "superadmin";
+  const onInstance = useOnInstance(instance.id);
+  const [editing, setEditing] = useState(false);
+  const [pick, setPick] = useState<PickedPack | null>(null);
+  const minecraftVersion = (JSON.parse(instance.server_env ?? "{}") as Record<string, string>).VERSION ?? null;
+
+  const save = useMutation({
+    mutationFn: (pack: PickedPack | null) =>
+      instancesApi.setPackLink(
+        instance.id,
+        pack ? { provider: pack.provider, packId: pack.packId, versionId: pack.versionId } : null
+      ),
+    onSuccess: (updated) => {
+      onInstance(updated);
+      setEditing(false);
+      setPick(null);
+    },
+  });
+
+  return (
+    <div className="pack-link">
+      <h3>Modpack</h3>
+      {instance.pack_link ? (
+        <p>
+          Linked to <strong>{instance.linked_pack_name}</strong> ({instance.pack_version_name}) on{" "}
+          {instance.pack_link === "ftb" ? "Feed The Beast" : "CurseForge"}. The server still runs the files it was imported
+          with; its first update switches it to the pack's own files.
+        </p>
+      ) : (
+        <p className="muted">
+          This server was imported, so it isn't tied to a modpack. If it is one (from FTB or CurseForge), link it to that pack
+          and the version it runs — then it can be checked for, and updated to, newer versions of the pack.
+        </p>
+      )}
+      {!canLink && !instance.pack_link && <p className="muted">A platform admin can link it.</p>}
+      {canLink && !editing && (
+        <div className="form-actions">
+          <button type="button" className={instance.pack_link ? "secondary" : undefined} onClick={() => setEditing(true)}>
+            {instance.pack_link ? "Change modpack…" : "Link to a modpack…"}
+          </button>
+          {instance.pack_link && (
+            <button type="button" className="ghost" onClick={() => save.mutate(null)} disabled={save.isPending}>
+              Unlink
+            </button>
+          )}
+        </div>
+      )}
+      {canLink && editing && (
+        <>
+          <PackPicker value={pick} onChange={setPick} expectedMinecraftVersion={minecraftVersion} />
+          <div className="form-actions">
+            <button type="button" onClick={() => save.mutate(pick)} disabled={!pick || save.isPending}>
+              {save.isPending ? "Saving…" : "Save link"}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setEditing(false);
+                setPick(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {save.isError && <p className="error-text">{errorMessage(save.error, "Couldn't save the link.")}</p>}
+    </div>
+  );
+}
+
+function PackUpdates({ instance }: { instance: Instance }) {
+  const queryClient = useQueryClient();
+  // An imported server linked to a pack: its first update converts it, so it's never automatic.
+  const linkedImport = instance.source === "import";
   const [pickVersion, setPickVersion] = useState(false);
   const [confirming, setConfirming] = useState<PackVersionOption | { id: number; name: string } | null>(null);
 
@@ -26,7 +127,7 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
   };
 
   // CurseForge version lists are reused by the manager for up to 12 hours; force refresh fetches them again.
-  const cachedSource = instance.source === "curseforge";
+  const cachedSource = (linkedImport ? instance.pack_link : instance.source) === "curseforge";
   const check = useMutation({
     mutationFn: (refresh: boolean) => instancesApi.checkForUpdate(instance.id, refresh),
     onSuccess: (updated, refresh) => {
@@ -136,6 +237,15 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
             <p>
               <strong>Switch to {confirming.name}?</strong> The server stops, its world and configs are backed up (see the Backups
               tab — the newest 5 are kept), and it's reinstalled with that version.
+              {linkedImport && (
+                <>
+                  {" "}
+                  <strong>
+                    This is its first update from the modpack: it switches to the pack's own files. The imported mods folder is
+                    kept, renamed; the world and configs stay.
+                  </strong>
+                </>
+              )}
               {"minecraftVersion" in confirming && current && confirming.minecraftVersion !== current.minecraftVersion && (
                 <>
                   {" "}
@@ -168,11 +278,15 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
               name={`auto-update-${instance.id}`}
               checked={instance.auto_update === mode.value}
               onChange={() => setMode.mutate(mode.value)}
-              disabled={setMode.isPending}
+              disabled={setMode.isPending || (linkedImport && mode.value === "auto")}
             />
             <span>
               <strong>{mode.label}</strong>
-              <span className="muted">{mode.help}</span>
+              <span className="muted">
+                {linkedImport && mode.value === "auto"
+                  ? "Not for an imported server yet: its first update switches it to the modpack's own files, so do that one by hand."
+                  : mode.help}
+              </span>
             </span>
           </label>
         ))}

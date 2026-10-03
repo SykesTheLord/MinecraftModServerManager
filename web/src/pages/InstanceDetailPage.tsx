@@ -82,7 +82,8 @@ export function InstanceDetailPage() {
   const isStopping = instance.status === "stopping";
   const hasServer = Boolean(instance.container_id);
   const cfInstallPending = instance.source === "curseforge" && !hasServer;
-  const canUpdate = canAdmin && (instance.source === "ftb" || instance.source === "curseforge");
+  // Imported servers get the tab too: it's where they're linked to the modpack they are.
+  const canUpdate = canAdmin;
   // Without a server container there's no console; land on a tab that still works.
   const tab = requestedTab === "console" && !hasServer ? (canUpdate ? "updates" : "backups") : requestedTab;
   const actionError = latestMutationError(start, stop, restart, updateSubdomain, remove);
@@ -211,6 +212,10 @@ export function InstanceDetailPage() {
         )}
       </section>
 
+      {instance.startupQuery && (
+        <StartupQueryPanel instance={instance} canAnswer={canAdmin} onAnswered={invalidate} />
+      )}
+
       {cfInstallPending && (
         <CurseForgeInstallPanel instance={instance} canManage={canAdmin} onChange={invalidate} />
       )}
@@ -220,7 +225,7 @@ export function InstanceDetailPage() {
           <Tabs label="Server tools" value={tab} onChange={setTab} options={tabs} />
           {tab === "console" && hasServer && (
             // Keyed on the container so the console reconnects once a container exists.
-            <ConsoleView key={instance.container_id ?? "none"} instanceId={instance.id} />
+            <ConsoleView key={instance.container_id ?? "none"} instanceId={instance.id} starting={instance.status === "installing"} />
           )}
           {tab === "properties" && canAdmin && hasServer && <ServerPropertiesEditor instanceId={instance.id} running={isRunning} />}
           {tab === "updates" && canUpdate && <PackUpdatesPanel instance={instance} />}
@@ -280,6 +285,88 @@ export function InstanceDetailPage() {
         </section>
       )}
     </Layout>
+  );
+}
+
+/**
+ * The server stopped partway through starting to ask a question on its
+ * console: Forge found blocks/items in the world that no installed mod has
+ * any more (usually after a pack update removed them), and waits for
+ * "/fml confirm" (delete them and carry on) or "/fml cancel" (don't start).
+ */
+function StartupQueryPanel({ instance, canAnswer, onAnswered }: { instance: Instance; canAnswer: boolean; onAnswered: () => void }) {
+  const query = instance.startupQuery!;
+  const [confirming, setConfirming] = useState(false);
+  const answer = useMutation({
+    mutationFn: (a: "confirm" | "cancel") => instancesApi.answerStartupQuery(instance.id, a),
+    onSuccess: () => {
+      setConfirming(false);
+      onAnswered();
+    },
+  });
+  const count = query.entries.length;
+  const what = count ? `${count} block${count === 1 ? "" : "s"}/item${count === 1 ? "" : "s"}` : "some blocks or items";
+
+  return (
+    <section className="card startup-query">
+      <div className="card-header">
+        <h2>The server is waiting for an answer</h2>
+      </div>
+      <p>
+        Forge stopped partway through starting: the world contains {what} that no installed mod provides any more —
+        usually because a pack update removed them. It won't finish starting (players are told "Server is still starting!")
+        until you choose:
+      </p>
+      <ul>
+        <li>
+          <strong>Remove them and continue</strong> deletes them from the world — from chests, inventories and wherever
+          they were placed — and finishes starting. Forge makes a world backup first, and the Backups tab has the backup
+          taken before the last update.
+        </li>
+        <li>
+          <strong>Cancel startup</strong> keeps the world untouched and stops the server, e.g. to go back to the pack
+          version that still has them.
+        </li>
+      </ul>
+      {count > 0 && (
+        <div className="chip-row startup-query-entries">
+          {query.entries.map((entry) => (
+            <code key={entry}>{entry}</code>
+          ))}
+        </div>
+      )}
+      <details>
+        <summary className="muted">What Forge printed</summary>
+        <pre className="console-log startup-query-log">{query.excerpt}</pre>
+      </details>
+      {canAnswer ? (
+        confirming ? (
+          <div className="delete-confirm">
+            <p>
+              Permanently remove {what} from the world{count ? ` (${query.entries.join(", ")})` : ""}?
+            </p>
+            <div className="form-actions">
+              <button className="danger" onClick={() => answer.mutate("confirm")} disabled={answer.isPending}>
+                {answer.isPending ? "Removing…" : "Remove them and continue"}
+              </button>
+              <button className="secondary" onClick={() => setConfirming(false)} disabled={answer.isPending}>
+                Back
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="form-actions">
+            <button onClick={() => setConfirming(true)}>Remove them and continue…</button>
+            <button className="secondary" onClick={() => answer.mutate("cancel")} disabled={answer.isPending}>
+              Cancel startup
+            </button>
+          </div>
+        )
+      ) : (
+        <p className="muted">An admin of this server can answer it.</p>
+      )}
+      {answer.isError && <p className="error-text">{errorMessage(answer.error, "Couldn't send the answer.")}</p>}
+    </section>
   );
 }
 

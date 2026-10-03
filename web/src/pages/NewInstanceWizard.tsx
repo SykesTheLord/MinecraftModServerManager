@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ftbApi } from "../api/ftb";
 import { curseforgeApi } from "../api/curseforge";
 import { instancesApi } from "../api/instances";
 import { errorMessage } from "../api/client";
@@ -12,6 +11,8 @@ import { FtbPackBrowser } from "../components/FtbPackBrowser";
 import { CfPackBrowser } from "../components/CfPackBrowser";
 import { ExternalIcon } from "../components/Icons";
 import { Tabs } from "../components/Tabs";
+import { PackPreviewCard } from "../components/PackPreviewCard";
+import { loadPackVersions, type PackVersion } from "../lib/packVersions";
 import { useBaseDomain } from "../hooks/useBaseDomain";
 import { formatMemory, slugify, SUBDOMAIN_HINT, SUBDOMAIN_PATTERN, timeAgo } from "../lib/format";
 
@@ -24,17 +25,6 @@ interface SelectedPack {
   description: string;
   artUrl: string | null;
   websiteUrl: string | null;
-}
-
-/** A pack version, normalized across FTB versions and CurseForge files. */
-interface PackVersion {
-  id: number;
-  name: string;
-  type: string;
-  date: string | number | null;
-  minecraftVersion: string | null;
-  loader: string | null;
-  recommendedMemoryMb: number | null;
 }
 
 const CF_TERMS_URL =
@@ -124,7 +114,16 @@ export function NewInstanceWizard() {
         </>
       )}
 
-      {pack && (
+      {/* Picking a pack shows its full details while choosing a version; configuring keeps a compact header. */}
+      {pack && step === 2 && (
+        <PackPreviewCard
+          provider={pack.source}
+          packId={pack.id}
+          fallback={{ name: pack.name, summary: pack.description, artUrl: pack.artUrl }}
+          onChange={() => setPack(null)}
+        />
+      )}
+      {pack && step === 3 && (
         <SelectedPackHeader
           pack={pack}
           onChange={() => {
@@ -204,29 +203,10 @@ function VersionStep({ pack, onSelect }: { pack: SelectedPack; onSelect: (v: Pac
   const { data: versions, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ["pack-versions", pack.source, pack.id],
     staleTime: 5 * 60 * 1000,
-    queryFn: async (): Promise<PackVersion[]> => {
-      if (pack.source === "ftb") {
-        return (await ftbApi.versions(pack.id)).map((v) => ({
-          id: v.id,
-          name: v.name,
-          type: v.type,
-          date: v.updatedAt,
-          minecraftVersion: v.minecraftVersion,
-          loader: v.loader,
-          recommendedMemoryMb: v.recommendedMemoryMb,
-        }));
-      }
+    queryFn: () => {
       const refresh = forceRefresh.current;
       forceRefresh.current = false;
-      return (await curseforgeApi.files(pack.id, refresh)).map((f) => ({
-        id: f.id,
-        name: f.displayName,
-        type: f.releaseType,
-        date: f.date,
-        minecraftVersion: f.minecraftVersion,
-        loader: f.loaders.join(", ") || null,
-        recommendedMemoryMb: null,
-      }));
+      return loadPackVersions(pack.source, pack.id, refresh);
     },
   });
 

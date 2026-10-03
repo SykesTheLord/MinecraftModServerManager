@@ -119,6 +119,16 @@ seconds to a minute); polls are generation-checked so one already in flight
 can't record that stop as a crash, and a container that exits cleanly
 (code 0/143, not OOM-killed) without the manager stopping it is marked
 `stopped`, not `error`.
+While a server is `installing`, the poller also looks for a console prompt in
+this boot's log (`instances/startupQuery.ts`: Forge ≤1.12's missing-registry
+`/fml confirm|cancel` question), exposed as `startupQuery` and answered via
+`POST /api/instances/:id/startup-query` (cancel then stops the server, or
+`unless-stopped` would boot it into the same question). Such prompts read the
+server's *stdin*, not RCON (which opens only after startup): containers are
+created with `OpenStdin` and `StdinOnce: false` (StdinOnce would close stdin
+when the first writer disconnects), `docker/consoleInput.ts` writes lines via
+a Docker attach, the console falls back to it while RCON refuses, and
+`startInstance` recreates older containers without it from the current spec.
 
 ### Importing natively run servers
 
@@ -142,6 +152,14 @@ returns at once; a `deployed` job keeps the new `instanceId` for an hour), and
 `GET /api/imports` lists jobs, so the UI (`/instances/import/:jobId`,
 `ImportsList` on the dashboard) can pick one up again. Browser uploads run in
 `web/src/lib/uploads.ts`, outside any page, so they survive in-app navigation.
+An imported server can be *linked* to the modpack it is (`pack_link`
+`ftb|curseforge` + ids in the `ftb_*`/`cf_*` columns + `linked_pack_name`;
+`PUT /api/instances/:id/pack-link`, superadmin-only, or `pack` on import
+deploy). It keeps running its imported files; `packUpdates.ts#packProvider`
+makes it checkable like a pack server, and its first update converts it
+(`setAsideMods` renames `mods/`, `convertLinkedImport` sets `source`), keeping
+`LEVEL` (FTB env and the CurseForge installer both honour it). Linked imports
+can't be set to `auto`.
 Imported rows have `source = 'import'` and their itzg env (`TYPE`,
 `VERSION`, `FORGE_VERSION`, …) as JSON in `server_env`; `buildContainerConfig`
 branches on that instead of emitting `TYPE=FTBA`. Extraction only writes

@@ -7,6 +7,7 @@ import {
   CF_SORT_FIELDS,
   MAX_SEARCH_WINDOW,
   isCurseForgeConfigured,
+  getCfModpackPreview,
   listCfModpackFiles,
   searchCfModpacks,
   type CfLoader,
@@ -43,6 +44,12 @@ curseforgeRouter.get("/modpacks", async (req, res) => {
   const parsed = searchSchema.safeParse(req.query);
   if (!parsed.success) throw new HttpError(400, z.prettifyError(parsed.error));
   res.json(await searchCfModpacks({ ...parsed.data, query: parsed.data.query || undefined, pageSize: PAGE_SIZE }));
+});
+
+curseforgeRouter.get("/modpacks/:id", async (req, res) => {
+  const modId = Number(routeParam(req, "id"));
+  if (!Number.isInteger(modId)) throw new HttpError(400, "Invalid modpack id.");
+  res.json(await getCfModpackPreview(modId));
 });
 
 curseforgeRouter.get("/modpacks/:id/files", async (req, res) => {

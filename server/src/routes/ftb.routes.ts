@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireSuperadmin } from "../auth/middleware.js";
 import { HttpError } from "../http/errors.js";
-import { listAllModpacks, listModpackVersions } from "../ftb/ftbCatalogClient.js";
+import { getModpackPreview, listAllModpacks, listModpackVersions } from "../ftb/ftbCatalogClient.js";
 
 export const ftbRouter = Router();
 ftbRouter.use(requireAuth, requireSuperadmin);
@@ -12,6 +12,16 @@ ftbRouter.get("/modpacks", async (_req, res) => {
     res.json(await listAllModpacks());
   } catch (err) {
     throw new HttpError(502, err instanceof Error ? err.message : "FTB catalog request failed.");
+  }
+});
+
+ftbRouter.get("/modpacks/:id", async (req, res) => {
+  const modpackId = Number(req.params.id);
+  if (!Number.isInteger(modpackId)) throw new HttpError(400, "Invalid modpack id.");
+  try {
+    res.json(await getModpackPreview(modpackId));
+  } catch (err) {
+    throw new HttpError(502, err instanceof Error ? err.message : "FTB catalog lookup failed.");
   }
 });
 

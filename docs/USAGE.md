@@ -56,7 +56,12 @@ Dashboard → **+ New server**, then:
    - **CurseForge** — tens of thousands of packs, so it's a live search:
      type to search, filter by Minecraft version and mod loader, sort, and
      **Load more** to page further. Needs a CurseForge API key — see below.
-2. **Pick a version.** Newest first, with its Minecraft version, loader,
+2. **Pick a version.** Picking a pack first shows its preview: banner and
+   logo, authors, installs or downloads, when it was released and last
+   updated, its tags, its full description (long ones start collapsed —
+   **Show more**), CurseForge screenshots, and links to its page on FTB or
+   CurseForge. Below that is the version list, newest first, with each
+   version's Minecraft version, loader,
    date and release/beta/alpha tag. The right Java runtime is resolved
    automatically — from FTB's own metadata for FTB packs, from the Minecraft
    version for CurseForge (overridable on the next step). Several older Forge
@@ -197,6 +202,28 @@ picks a Java version from the Minecraft version unless you override it, and
 `server-port`/`server-ip` in `server.properties` are reset so the server is
 reachable through the shared port 25565. Everything else in
 `server.properties` is kept.
+
+**If the server is a modpack**, for example ATM9 that you installed by hand,
+tick **This server is a modpack** on the review step. Then pick the pack
+(FTB, or CurseForge when it's set up) and the version the server runs.
+Versions for the server's Minecraft version are suggested first, and a
+mismatch is flagged. The server still runs exactly the files you imported.
+The link lets it be checked for new versions of the pack, under its
+**Updates** tab like any FTB or CurseForge server. You can also link, change
+or unlink a pack there later. Linking is for platform admins only, because
+it decides what the server's next update installs.
+
+The **first update** of a linked server switches it to running the pack's
+own files:
+- the server is backed up first, as for any update;
+- its imported `mods/` folder is renamed to `mods.before-pack-<date>`, not
+  deleted, so old jars can't clash with the pack's;
+- the pack version is installed, keeping the world (same world folder) and
+  configs.
+
+From then on it's an ordinary FTB or CurseForge server. Because that first
+update changes how the server runs, a linked imported server can't be set to
+update automatically until it has been updated once by hand.
 
 Imports that are never deployed are discarded after 24 hours (and on manager
 restart). The largest importable server is 64 GiB by default
@@ -346,6 +373,36 @@ Instance detail page → Console. This is a real, live connection: it tails
 the container's stdout/stderr and lets you send server commands (e.g. `list`,
 `say hello`, `whitelist add ...`) via RCON, without needing `docker exec` or
 SSH access to the host.
+
+Minecraft only opens RCON once the server has finished starting. Until then,
+commands you type go straight into the server's own console input. The
+console says so, and any reply shows up in the log.
+
+### When a server stops at a question while starting
+
+Old Forge versions (1.12 and earlier) can stop partway through starting to
+ask a question. This usually happens after a pack update removed some blocks
+or items that the world still contains, which Forge calls "missing registry
+entries". Until the question is answered, the server never finishes starting,
+and players are told *"Server is still starting! Please wait before
+reconnecting."*
+
+The server's page then shows **The server is waiting for an answer**, with
+the missing entries and what Forge printed. A server admin can choose:
+
+- **Remove them and continue** (asks you to confirm). The missing entries are
+  deleted from the world: chests, inventories, and wherever they were placed.
+  The server then finishes starting. Forge makes its own world backup first,
+  and the Backups tab has the backup taken before the last update.
+- **Cancel startup** leaves the world untouched and stops the server, for
+  example so you can go back to the pack version that still has those items.
+
+Typing `/fml confirm` or `/fml cancel` in the console does the same thing.
+
+Servers created before this feature have no console input. They get it the
+next time they're started from stopped: their container is recreated with the
+same settings, and nothing in the server's volume changes. If a server is
+stuck at the question right now, **Stop** it and **Start** it once.
 
 ## Logs on disk
 

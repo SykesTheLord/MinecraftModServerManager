@@ -37,6 +37,7 @@ export function InstanceCard({ instance, baseDomain }: { instance: Instance; bas
       <p className="instance-pack">{instance.ftb_pack_name}</p>
       <div className="instance-meta">
         <SourceChip source={instance.source} />
+        {instance.linked_pack_name && <span className="chip">{instance.linked_pack_name}</span>}
         <span className="chip">{formatMemory(instance.memory_mb)}</span>
         {instance.available_version_id && <span className="chip accent">Update available</span>}
         {instance.updating && <span className="chip warning">Updating…</span>}

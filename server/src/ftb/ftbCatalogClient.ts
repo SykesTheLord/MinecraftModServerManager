@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { allowedArtworkUrl } from "../http/artwork.js";
+import type { PackPreview } from "../catalog/packPreview.js";
 
 /**
  * FTB's public modpack catalog API — the same backing data source used by the
@@ -52,6 +53,12 @@ const modpackDetailSchema = z.looseObject({
   art: z.array(z.looseObject({ type: z.string(), url: z.string() })).default([]),
   tags: z.array(z.looseObject({ name: z.string() })).default([]),
   versions: z.array(modpackVersionSchema).default([]),
+  // For the preview (Markdown; see catalog/packPreview.ts).
+  description: z.string().nullable().optional(),
+  slug: z.string().nullable().optional(),
+  released: z.number().nullable().optional(),
+  authors: z.array(z.looseObject({ name: z.string() })).default([]),
+  links: z.array(z.looseObject({ name: z.string().nullable().optional(), link: z.string() })).default([]),
 });
 
 const packIdListSchema = z.looseObject({
@@ -188,6 +195,32 @@ export async function listAllModpacks(): Promise<ModpackSummary[]> {
       refreshing = null;
     });
   return refreshing;
+}
+
+const isoFromUnix = (seconds: number | null | undefined) => (seconds ? new Date(seconds * 1000).toISOString() : null);
+
+/** Everything the UI shows about one pack before it's deployed. */
+export async function getModpackPreview(modpackId: number): Promise<PackPreview> {
+  const pack = await getModpackDetail(modpackId);
+  const art = (type: string) => allowedArtworkUrl(pack.art.find((a) => a.type === type)?.url);
+  return {
+    id: pack.id,
+    name: pack.name,
+    summary: pack.synopsis.trim(),
+    description: (pack.description ?? "").trim(),
+    artUrl: art("square") ?? art("logo"),
+    bannerUrl: art("splash") ?? art("background"),
+    screenshots: [],
+    authors: pack.authors.map((a) => a.name),
+    tags: pack.tags.map((t) => t.name),
+    downloads: pack.installs,
+    updatedAt: isoFromUnix(publicVersions(pack)[0]?.updatedAt ?? pack.updated),
+    releasedAt: isoFromUnix(pack.released),
+    websiteUrl: pack.slug ? `https://www.feed-the-beast.com/modpacks/${pack.id}-${pack.slug}` : null,
+    links: pack.links
+      .filter((l) => /^https:\/\//.test(l.link))
+      .map((l) => ({ name: l.name || new URL(l.link).hostname, url: l.link })),
+  };
 }
 
 export async function listModpackVersions(modpackId: number): Promise<ModpackVersionSummary[]> {

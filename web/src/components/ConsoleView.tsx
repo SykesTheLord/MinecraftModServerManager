@@ -13,7 +13,8 @@ const STATUS_LABELS: Record<SocketStatus, string> = {
 const FOLLOW_SLACK_PX = 40;
 const HISTORY_LIMIT = 50;
 
-export function ConsoleView({ instanceId }: { instanceId: string }) {
+/** `starting`: the server is booting, so it won't take commands yet (Minecraft opens RCON once it has loaded). */
+export function ConsoleView({ instanceId, starting = false }: { instanceId: string; starting?: boolean }) {
   const { lines, status, sendCommand } = useInstanceSocket(instanceId);
   const [command, setCommand] = useState("");
   const [following, setFollowing] = useState(true);
@@ -63,6 +64,13 @@ export function ConsoleView({ instanceId }: { instanceId: string }) {
           </div>
         ))}
       </div>
+      {starting && canSend && (
+        <p className="hint console-hint">
+          The server is still starting; it's ready once the log shows a <code>Done</code> line. Big modpacks can take
+          several minutes, and players trying to join meanwhile are told to wait. Commands typed now go straight into
+          its console, so you can answer startup prompts (like <code>/fml confirm</code>) here.
+        </p>
+      )}
       <form
         className="console-input"
         onSubmit={(e) => {

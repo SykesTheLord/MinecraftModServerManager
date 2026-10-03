@@ -1,5 +1,5 @@
 import { api, ApiError } from "./client";
-import type { ImportJob, LocalSshKey, ServerType } from "./types";
+import type { ImportJob, LocalSshKey, PackLinkInput, ServerType } from "./types";
 
 export interface SshPullInput {
   host: string;
@@ -25,6 +25,8 @@ export interface DeployImportInput {
   loaderVersion?: string;
   customJar?: string;
   javaVersion: number | null;
+  /** The modpack (and version) this server is, so it can be checked for updates. */
+  pack?: PackLinkInput | null;
 }
 
 // Chunks keep every request well under the server's per-request limits and

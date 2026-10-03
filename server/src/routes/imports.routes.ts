@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth, requireSuperadmin } from "../auth/middleware.js";
 import { HttpError, routeParam } from "../http/errors.js";
 import { assertSubdomainAvailable, instanceService } from "../instances/instanceService.js";
+import { resolvePackLink } from "../instances/packUpdates.js";
 import { SERVER_TYPES } from "../imports/analyze.js";
 import { KNOWN_JAVA_VERSIONS } from "../docker/javaImage.js";
 import { importJobs } from "../imports/importJobs.js";
@@ -124,15 +125,25 @@ const deploySchema = z.object({
     .int()
     .refine((v) => (KNOWN_JAVA_VERSIONS as readonly number[]).includes(v), "Unsupported Java version.")
     .nullable(),
+  /** The modpack (and version) this server is, so it can be checked for updates. */
+  pack: z
+    .object({
+      provider: z.enum(["ftb", "curseforge"]),
+      packId: z.number().int().positive(),
+      versionId: z.number().int().positive(),
+    })
+    .nullable()
+    .optional(),
 });
 
 // Runs in the background (copying a large server into its volume takes a while); poll the job for the outcome.
-importsRouter.post("/:id/deploy", (req, res) => {
-  const input = parse(deploySchema, req.body);
-  // Cheap checks up front, so a taken subdomain is reported right away rather than through the job.
+importsRouter.post("/:id/deploy", async (req, res) => {
+  const { pack, ...input } = parse(deploySchema, req.body);
+  // Checked up front, so a taken subdomain or an unknown pack is reported right away rather than through the job.
   assertSubdomainAvailable(input.subdomain);
+  const packLink = pack ? await resolvePackLink(pack.provider, pack.packId, pack.versionId) : null;
   const job = importJobs.startDeploy(routeParam(req, "id"), (root, analysis) =>
-    instanceService.createImportedInstance(input, root, analysis)
+    instanceService.createImportedInstance({ ...input, packLink }, root, analysis)
   );
   res.status(202).json(job);
 });

@@ -8,6 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Tabs } from "../components/Tabs";
 import { ImportsList } from "../components/ImportsList";
 import { CopyButton } from "../components/CopyButton";
+import { PackPicker, type PickedPack } from "../components/PackPicker";
 import { beginUpload, stopUpload, useLocalUpload } from "../lib/uploads";
 import { useBaseDomain } from "../hooks/useBaseDomain";
 import { formatBytes, formatMemory, slugify, SUBDOMAIN_HINT, SUBDOMAIN_PATTERN } from "../lib/format";
@@ -514,6 +515,10 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
   const subdomain = subdomainEdited ? subdomainDraft : slugify(name);
   const [memoryMb, setMemoryMb] = useState(analysis.memoryMb ?? 4096);
   const [serverType, setServerType] = useState<ServerType>(analysis.serverType);
+  // The modpack this server is, if any: lets it be checked for (and later updated to) newer pack versions.
+  const [isModpack, setIsModpack] = useState(false);
+  const [pack, setPack] = useState<PickedPack | null>(null);
+  const packMissing = isModpack && !pack;
   const [minecraftVersion, setMinecraftVersion] = useState(analysis.minecraftVersion ?? "");
   const [loaderVersion, setLoaderVersion] = useState(analysis.loaderVersion ?? "");
   const [customJar, setCustomJar] = useState(analysis.customJar ?? analysis.jars[0] ?? "");
@@ -533,6 +538,7 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
         loaderVersion: loaderField ? loaderVersion || undefined : undefined,
         customJar: serverType === "CUSTOM" ? customJar : undefined,
         javaVersion,
+        pack: isModpack && pack ? { provider: pack.provider, packId: pack.packId, versionId: pack.versionId } : null,
       }),
     // The copy runs on the server; the page polls the job and moves on to the server once it's deployed.
     onSuccess: (updated) => {
@@ -567,6 +573,28 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
           ))}
         </ul>
       )}
+
+      {/* Outside the deploy form: the pack browsers' search fields would submit it on Enter. */}
+      <fieldset className="plain-fieldset import-pack" disabled={deploying || deploy.isPending}>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={isModpack}
+            onChange={(e) => {
+              setIsModpack(e.target.checked);
+              if (!e.target.checked) setPack(null);
+            }}
+          />
+          <span>
+            This server is a modpack (from FTB or CurseForge)
+            <span className="hint">
+              Pick the pack and the version it runs, so the server can be checked for new versions. It keeps running exactly
+              the files imported here; updating it later switches it to the pack's own files.
+            </span>
+          </span>
+        </label>
+        {isModpack && <PackPicker value={pack} onChange={setPack} expectedMinecraftVersion={analysis.minecraftVersion} />}
+      </fieldset>
 
       <form
         onSubmit={(e) => {
@@ -688,7 +716,8 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
         )}
         {error && <p className="error-text">{error}</p>}
         <div className="form-actions">
-          <button type="submit" disabled={deploy.isPending || deploying}>
+          {packMissing && <span className="muted">Pick the modpack and version first, or untick "This server is a modpack".</span>}
+          <button type="submit" disabled={deploy.isPending || deploying || packMissing}>
             {deploy.isPending || deploying ? "Deploying (copying files)…" : "Deploy"}
           </button>
           <button type="button" className="secondary" onClick={onCancel} disabled={deploy.isPending || deploying}>

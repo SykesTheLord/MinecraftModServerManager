@@ -5,7 +5,11 @@ import { userRepo } from "../db/repositories/userRepo.js";
 import { instanceRepo } from "../db/repositories/instanceRepo.js";
 import { hasInstanceRole } from "../auth/userService.js";
 import { followContainerLogs } from "../docker/logsStream.js";
-import { sendConsoleCommand } from "../rcon/rconClient.js";
+import { describeRconError, sendConsoleCommand } from "../rcon/rconClient.js";
+import { writeConsoleLine } from "../docker/consoleInput.js";
+import { getStartupQuery } from "../instances/healthPoller.js";
+import { instanceService } from "../instances/instanceService.js";
+import { HttpError } from "../http/errors.js";
 import { isCrossOriginBrowserRequest, isFromInstanceNetwork } from "../http/security.js";
 import { sessionStore } from "../auth/sessionStore.js";
 
@@ -117,11 +121,37 @@ function handleConnection(ws: WebSocket, instanceId: string, checkStillAllowed: 
     if (payload.type !== "command" || typeof payload.command !== "string" || !payload.command) return;
     const command = payload.command;
 
-    closeIfRevoked()
-      .then((revoked) => (revoked ? undefined : sendConsoleCommand(instance.container_name, instance.rcon_password, command)))
-      .then((response) => {
-        if (response !== undefined) send({ type: "response", response });
-      })
-      .catch((err) => send({ type: "error", message: err instanceof Error ? err.message : "RCON command failed." }));
+    const run = async () => {
+      if (await closeIfRevoked()) return;
+      // Answering Forge's startup question by hand works just like the buttons on the server page.
+      const answer = /^\/?fml\s+(confirm|cancel)$/i.exec(command.trim())?.[1]?.toLowerCase() as "confirm" | "cancel" | undefined;
+      if (answer && getStartupQuery(instanceId)) {
+        await instanceService.answerStartupQuery(instanceId, answer);
+        send({
+          type: "response",
+          response:
+            answer === "confirm"
+              ? "Answered Forge: confirm. It removes the missing entries and carries on starting."
+              : "Answered Forge: cancel. Startup is aborted and the server is being stopped.",
+        });
+        return;
+      }
+      try {
+        send({ type: "response", response: await sendConsoleCommand(instance.container_name, instance.rcon_password, command) });
+      } catch (err) {
+        const current = instanceRepo.findById(instanceId);
+        // RCON only opens once the server has started; until then, type into its console input instead.
+        if ((err as { code?: string }).code === "ECONNREFUSED" && current?.status === "installing" && current.container_id) {
+          await writeConsoleLine(current.container_id, command);
+          send({ type: "response", response: "(Typed into the server's console — it's still starting, so replies only show in the log.)" });
+          return;
+        }
+        // The instance's current status says whether "refused" means "still starting" or "not running".
+        send({ type: "error", message: describeRconError(err, current?.status ?? "") });
+      }
+    };
+    run().catch((err: unknown) =>
+      send({ type: "error", message: err instanceof HttpError ? err.message : `The command couldn't be sent: ${(err as Error).message}` })
+    );
   });
 }

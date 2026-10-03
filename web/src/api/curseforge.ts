@@ -1,5 +1,5 @@
 import { api } from "./client";
-import type { CfFileSummary, CfLoader, CfModpackSummary, CfSort } from "./types";
+import type { CfFileSummary, CfLoader, CfModpackSummary, CfSort, PackPreview } from "./types";
 
 export interface CfSearchParams {
   query: string;
@@ -25,6 +25,7 @@ export const curseforgeApi = {
     if (params.loader) qs.set("loader", params.loader);
     return api.get<CfSearchPage>(`/curseforge/modpacks?${qs}`);
   },
+  preview: (modId: number) => api.get<PackPreview>(`/curseforge/modpacks/${modId}`),
   /** `refresh`: force the list to be fetched from CurseForge again (otherwise reused for 12 hours). */
   files: (modId: number, refresh = false) =>
     api.get<CfFileSummary[]>(`/curseforge/modpacks/${modId}/files${refresh ? "?refresh=1" : ""}`),

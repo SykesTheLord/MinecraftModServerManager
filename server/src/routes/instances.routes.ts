@@ -7,6 +7,7 @@ import { instanceService } from "../instances/instanceService.js";
 import type { UserRow } from "../db/repositories/userRepo.js";
 import { HttpError, routeParam } from "../http/errors.js";
 import { appLogger } from "../logging/appLogger.js";
+import { getStartupQuery } from "../instances/healthPoller.js";
 import { KNOWN_JAVA_VERSIONS } from "../docker/javaImage.js";
 import { readServerProperties, writeServerProperties } from "../instances/serverProperties.js";
 import {
@@ -16,6 +17,8 @@ import {
   isUpdating,
   isWithinUpdateWindow,
   listPackVersions,
+  packProvider,
+  resolvePackLink,
   restoreBackup,
   validateUpdateWindow,
 } from "../instances/packUpdates.js";
@@ -46,6 +49,8 @@ export function serializeInstance(instance: InstanceRow, requester: UserRow) {
     installRunning: instance.source === "curseforge" && isInstallRunning(instance.id),
     updating: isUpdating(instance.id),
     updateWindowOpen: isWithinUpdateWindow(instance),
+    /** A question the server is waiting on before it can finish starting (e.g. Forge's missing registry entries). */
+    startupQuery: getStartupQuery(instance.id),
     missingFiles: parseMissingFiles(instance).map((file) => ({ ...file, uploaded: uploaded?.has(file.fileName) ?? false })),
   };
 }
@@ -138,6 +143,15 @@ instancesRouter.put("/:id/curseforge/files/:fileId", requireInstanceRole("admin"
   res.json(serializeInstance(instanceRepo.findById(instance.id)!, req.user!));
 });
 
+// Admins only: confirming deletes the missing blocks/items from the world.
+instancesRouter.post("/:id/startup-query", requireInstanceRole("admin"), async (req, res) => {
+  const parsed = z.object({ answer: z.enum(["confirm", "cancel"]) }).safeParse(req.body);
+  if (!parsed.success) throw new HttpError(400, z.prettifyError(parsed.error));
+  const id = routeParam(req, "id");
+  await instanceService.answerStartupQuery(id, parsed.data.answer);
+  res.json(serializeInstance(requireRow(id), req.user!));
+});
+
 // ---- server.properties ----
 
 instancesRouter.get("/:id/properties", requireInstanceRole("admin"), async (req, res) => {
@@ -161,6 +175,31 @@ instancesRouter.put("/:id/properties", requireInstanceRole("admin"), async (req,
   res.json({ ...view, restarted: parsed.data.restart && running });
 });
 
+// ---- modpack link (imported servers) ----
+
+const packLinkSchema = z
+  .object({
+    provider: z.enum(["ftb", "curseforge"]),
+    packId: z.number().int().positive(),
+    versionId: z.number().int().positive(),
+  })
+  .nullable();
+
+/**
+ * Links an imported server to the modpack (and version) it is, or unlinks it
+ * (body null). Platform admins only: the link decides what the server's next
+ * update installs.
+ */
+instancesRouter.put("/:id/pack-link", requireSuperadmin, async (req, res) => {
+  const parsed = packLinkSchema.safeParse(req.body?.pack ?? null);
+  if (!parsed.success) throw new HttpError(400, z.prettifyError(parsed.error));
+  const id = routeParam(req, "id");
+  if (requireRow(id).source !== "import") throw new HttpError(409, "Only imported servers can be linked to a modpack.");
+  const link = parsed.data ? await resolvePackLink(parsed.data.provider, parsed.data.packId, parsed.data.versionId) : null;
+  instanceRepo.setPackLink(id, link);
+  res.json(serializeInstance(requireRow(id), req.user!));
+});
+
 // ---- modpack versions & updates ----
 
 // `?refresh=1`: the admin clicked force refresh (CurseForge version lists are otherwise reused for 12 hours).
@@ -168,7 +207,7 @@ const wantsRefresh = (value: unknown) => value === "1" || value === "true";
 
 instancesRouter.get("/:id/versions", requireInstanceRole("admin"), async (req, res) => {
   const row = requireRow(routeParam(req, "id"));
-  const current = row.source === "ftb" ? row.ftb_version_id : row.cf_file_id;
+  const current = packProvider(row) === "ftb" ? row.ftb_version_id : row.cf_file_id;
   const versions = await listPackVersions(row, { refresh: wantsRefresh(req.query.refresh) });
   res.json(versions.map((v) => ({ ...v, current: v.id === current })));
 });
@@ -190,6 +229,12 @@ instancesRouter.put("/:id/updates/settings", requireInstanceRole("admin"), (req,
   const id = routeParam(req, "id");
   requireRow(id);
   if (parsed.data.window) validateUpdateWindow(parsed.data.window);
+  if (parsed.data.autoUpdate === "auto" && requireRow(id).source === "import") {
+    throw new HttpError(
+      400,
+      "An imported server can't update automatically: its first update switches it to the modpack's own files, so do that one by hand."
+    );
+  }
   if (parsed.data.autoUpdate) instanceRepo.setAutoUpdate(id, parsed.data.autoUpdate);
   if (parsed.data.window !== undefined) instanceRepo.setUpdateWindow(id, parsed.data.window);
   res.json(serializeInstance(requireRow(id), req.user!));

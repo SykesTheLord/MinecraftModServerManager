@@ -1,5 +1,5 @@
 import { api, ApiError } from "./client";
-import type { AutoUpdateMode, BackupInfo, Instance, MissingFileDetail, PackVersionOption, ServerPropertiesView, UpdateWindow } from "./types";
+import type { AutoUpdateMode, BackupInfo, Instance, MissingFileDetail, PackLinkInput, PackVersionOption, ServerPropertiesView, UpdateWindow } from "./types";
 
 export interface CreateInstanceInput {
   name: string;
@@ -35,6 +35,10 @@ export const instancesApi = {
   applyUpdate: (id: string, versionId: number) => api.post<Instance>(`/instances/${id}/updates/apply`, { versionId }),
   createCurseForge: (input: CreateCurseForgeInstanceInput) => api.post<Instance>("/instances/curseforge", input),
   retryCurseForgeInstall: (id: string) => api.post<{ ok: true }>(`/instances/${id}/curseforge/retry`),
+  answerStartupQuery: (id: string, answer: "confirm" | "cancel") =>
+    api.post<Instance>(`/instances/${id}/startup-query`, { answer }),
+  /** Links an imported server to the modpack (and version) it is; null unlinks it. Platform admins only. */
+  setPackLink: (id: string, pack: PackLinkInput | null) => api.put<Instance>(`/instances/${id}/pack-link`, { pack }),
   missingFiles: (id: string) => api.get<MissingFileDetail[]>(`/instances/${id}/curseforge/missing-files`),
   uploadCurseForgeFile: async (id: string, fileId: number, file: File): Promise<Instance> => {
     const res = await fetch(`/api/instances/${id}/curseforge/files/${fileId}`, {
