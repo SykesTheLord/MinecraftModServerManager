@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { importsApi } from "../api/imports";
 import { errorMessage } from "../api/client";
 import { Layout } from "../components/Layout";
 import { PageHeader } from "../components/PageHeader";
 import { Tabs } from "../components/Tabs";
+import { ImportsList } from "../components/ImportsList";
+import { beginUpload, stopUpload, useLocalUpload } from "../lib/uploads";
 import { useBaseDomain } from "../hooks/useBaseDomain";
 import { formatBytes, formatMemory, slugify, SUBDOMAIN_HINT, SUBDOMAIN_PATTERN } from "../lib/format";
 import type { ImportAnalysis, ImportJob, ServerType } from "../api/types";
@@ -33,38 +35,70 @@ const LOADER_FIELD: Record<ServerType, { label: string; optional: boolean } | nu
   CUSTOM: null,
 };
 
+/**
+ * One import per URL (/instances/import/<jobId>): the work runs on the server
+ * (and, for an upload, in this tab), so the admin can leave and come back —
+ * from the list here or on the dashboard — without losing it.
+ */
 export function ImportServerPage() {
-  const [jobId, setJobId] = useState<string | null>(null);
+  const { jobId } = useParams<{ jobId?: string }>();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const localUpload = useLocalUpload(jobId);
 
   const { data: job, error: jobError } = useQuery({
     queryKey: ["import", jobId],
     queryFn: () => importsApi.get(jobId!),
     enabled: !!jobId,
+    retry: false,
     refetchInterval: (query) => {
       const state = query.state.data?.state;
-      return state === "receiving" || state === "processing" ? 1000 : false;
+      return state === "receiving" || state === "processing" || state === "deploying" ? 1000 : false;
     },
   });
 
+  // Deployed while this page was open (or opened afterwards): go to the new server and dismiss the import.
+  useEffect(() => {
+    if (job?.state !== "deployed" || !job.instanceId) return;
+    void importsApi.cancel(job.id).catch(() => undefined);
+    void queryClient.invalidateQueries({ queryKey: ["imports"] });
+    void queryClient.invalidateQueries({ queryKey: ["instances"] });
+    navigate(`/instances/${job.instanceId}`, { replace: true });
+  }, [job, navigate, queryClient]);
+
+  const started = (id: string) => {
+    void queryClient.invalidateQueries({ queryKey: ["imports"] });
+    navigate(`/instances/import/${id}`);
+  };
   const reset = () => {
-    if (jobId) void importsApi.cancel(jobId).catch(() => undefined);
-    setJobId(null);
+    if (jobId) {
+      stopUpload(jobId);
+      void importsApi.cancel(jobId).catch(() => undefined);
+      queryClient.removeQueries({ queryKey: ["import", jobId] });
+    }
+    void queryClient.invalidateQueries({ queryKey: ["imports"] });
+    navigate("/instances/import");
   };
 
   return (
     <Layout narrow title="Import a server">
-      <Link to="/" className="back-link">
-        ← Servers
+      <Link to={jobId ? "/instances/import" : "/"} className="back-link">
+        {jobId ? "← All imports" : "← Servers"}
       </Link>
       <PageHeader
         title="Import a server"
         subtitle="Bring over a server that's been running natively (e.g. on an Ubuntu machine) — its mods, configs and world move into a container here."
       />
-      <div className="callout warning">
-        <p>Stop the server on the old machine first, so its world is saved and not changing while it's copied.</p>
-      </div>
 
-      {!jobId && <SourceStep onStarted={setJobId} />}
+      {!jobId && (
+        <>
+          <div className="callout warning">
+            <p>Stop the server on the old machine first, so its world is saved and not changing while it's copied.</p>
+          </div>
+          <ImportsList title="Imports in progress" />
+          <SourceStep onStarted={started} />
+        </>
+      )}
 
       {jobId && !job && !jobError && (
         <div className="page-loading">
@@ -73,12 +107,19 @@ export function ImportServerPage() {
       )}
       {jobError && (
         <section className="card">
-          <p className="error-text">{errorMessage(jobError, "Couldn't load the import.")}</p>
-          <button onClick={() => setJobId(null)}>Start over</button>
+          <h2>This import isn't available</h2>
+          <p className="muted">
+            {errorMessage(jobError, "Couldn't load the import.")} Finished imports appear on the dashboard as servers.
+          </p>
+          <Link to="/instances/import" className="button-link">
+            Start a new import
+          </Link>
         </section>
       )}
 
-      {job && (job.state === "receiving" || job.state === "processing") && <ProgressStep job={job} onCancel={reset} />}
+      {job && (job.state === "receiving" || job.state === "processing") && (
+        <ProgressStep job={job} localUpload={localUpload} onCancel={reset} />
+      )}
 
       {job?.state === "failed" && (
         <section className="card">
@@ -116,18 +157,9 @@ function SourceStep({ onStarted }: { onStarted: (jobId: string) => void }) {
 
 function UploadSourceForm({ onStarted }: { onStarted: (jobId: string) => void }) {
   const [file, setFile] = useState<File | null>(null);
-  const [sent, setSent] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  const upload = useMutation({
-    mutationFn: (f: File) => {
-      abortRef.current = new AbortController();
-      setSent(0);
-      return importsApi.upload(f, setSent, abortRef.current.signal);
-    },
-    onSuccess: (job) => onStarted(job.id),
-  });
+  // Creates the job and hands the file to the background uploader (lib/uploads.ts), which keeps
+  // sending it while you move around the app.
+  const upload = useMutation({ mutationFn: (f: File) => beginUpload(f), onSuccess: (job) => onStarted(job.id) });
 
   return (
     <form
@@ -151,24 +183,14 @@ function UploadSourceForm({ onStarted }: { onStarted: (jobId: string) => void })
           required
         />
       </label>
-      {upload.isPending && file && (
-        <div className="progress-row">
-          <progress value={sent} max={file.size} />
-          <span className="muted">
-            {formatBytes(sent)} of {formatBytes(file.size)} ({Math.floor((sent / Math.max(1, file.size)) * 100)}%)
-          </span>
-        </div>
-      )}
-      {upload.isError && <p className="error-text">{errorMessage(upload.error, "Upload failed.")}</p>}
+      <p className="hint">
+        The upload carries on while you use the rest of the app; just keep this browser tab open until it's done.
+      </p>
+      {upload.isError && <p className="error-text">{errorMessage(upload.error, "Couldn't start the upload.")}</p>}
       <div className="form-actions">
         <button type="submit" disabled={!file || upload.isPending}>
-          {upload.isPending ? "Uploading…" : "Upload"}
+          {upload.isPending ? "Starting…" : "Upload"}
         </button>
-        {upload.isPending && (
-          <button type="button" className="secondary" onClick={() => abortRef.current?.abort()}>
-            Cancel
-          </button>
-        )}
       </div>
     </form>
   );
@@ -361,13 +383,32 @@ function SshSourceForm({ onStarted }: { onStarted: (jobId: string) => void }) {
   );
 }
 
-function ProgressStep({ job, onCancel }: { job: ImportJob; onCancel: () => void }) {
+function ProgressStep({
+  job,
+  localUpload,
+  onCancel,
+}: {
+  job: ImportJob;
+  localUpload: { running: boolean; error: string | null };
+  onCancel: () => void;
+}) {
   const receiving = job.state === "receiving";
+  // An upload only this tab could have been sending: if it isn't (any more), nothing will finish it.
+  const uploadOrphaned = receiving && job.source === "upload" && !localUpload.running;
   return (
     <section className="card">
-      <h2>2. {receiving ? "Copying" : "Unpacking and analyzing"}</h2>
+      <h2>2. {receiving ? (job.source === "upload" ? "Uploading" : "Copying") : "Unpacking and analyzing"}</h2>
       <p className="muted">{job.label}</p>
-      {receiving ? (
+      {uploadOrphaned ? (
+        <div className="callout danger">
+          <p>
+            {localUpload.error
+              ? `The upload stopped: ${localUpload.error}`
+              : "This upload was being sent from a browser tab that has since been closed or reloaded, so it can't continue."}{" "}
+            Start over to upload the archive again.
+          </p>
+        </div>
+      ) : receiving ? (
         <div className="progress-row">
           {job.expectedBytes ? <progress value={job.receivedBytes} max={job.expectedBytes} /> : <progress />}
           <span className="muted">
@@ -381,15 +422,23 @@ function ProgressStep({ job, onCancel }: { job: ImportJob; onCancel: () => void 
           <span className="muted">This can take a few minutes for a large server.</span>
         </div>
       )}
-      <button className="secondary" onClick={onCancel}>
-        Cancel
+      {!uploadOrphaned && (
+        <p className="hint">
+          {job.source === "upload" && receiving
+            ? "You can use the rest of the app meanwhile — the upload continues as long as this browser tab stays open. Come back here (or to the dashboard) to pick it up."
+            : "This runs on the server: you can leave this page, or close the browser, and pick it up later from the dashboard or the import page."}
+        </p>
+      )}
+      <button className={uploadOrphaned ? undefined : "secondary"} onClick={onCancel}>
+        {uploadOrphaned ? "Start over" : "Cancel"}
       </button>
     </section>
   );
 }
 
 function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: ImportAnalysis; onCancel: () => void }) {
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const deploying = job.state === "deploying";
   const baseDomain = useBaseDomain();
 
   const initialName = analysis.motd?.replace(/§./g, "").trim().slice(0, 60) ?? "";
@@ -420,8 +469,13 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
         customJar: serverType === "CUSTOM" ? customJar : undefined,
         javaVersion,
       }),
-    onSuccess: (instance) => navigate(`/instances/${instance.id}`),
+    // The copy runs on the server; the page polls the job and moves on to the server once it's deployed.
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["import", job.id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["imports"] });
+    },
   });
+  const error = deploy.isError ? errorMessage(deploy.error, "Deploy failed.") : !deploying ? job.error : null;
 
   return (
     <section className="card">
@@ -455,115 +509,124 @@ function ReviewStep({ job, analysis, onCancel }: { job: ImportJob; analysis: Imp
           deploy.mutate();
         }}
       >
-        <label>
-          Display name
-          <input value={name} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <label>
-          Subdomain
-          <div className="subdomain-input">
-            <input
-              value={subdomain}
-              onChange={(e) => {
-                setSubdomainEdited(true);
-                setSubdomain(e.target.value.toLowerCase());
-              }}
-              pattern={SUBDOMAIN_PATTERN}
-              title={SUBDOMAIN_HINT}
-              spellCheck={false}
-              required
-            />
-            <span>.{baseDomain ?? "…"}</span>
-          </div>
-        </label>
-        <label>
-          Memory (heap)
-          <select value={memoryMb} onChange={(e) => setMemoryMb(Number(e.target.value))}>
-            {memoryOptions.map((mb) => (
-              <option key={mb} value={mb}>
-                {formatMemory(mb)}
-                {mb === analysis.memoryMb ? " (from the old server's -Xmx)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="form-row">
+        <fieldset className="plain-fieldset" disabled={deploying || deploy.isPending}>
           <label>
-            Platform
-            <select value={serverType} onChange={(e) => setServerType(e.target.value as ServerType)}>
-              {Object.entries(SERVER_TYPE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
+            Display name
+            <input value={name} onChange={(e) => setName(e.target.value)} required />
+          </label>
+          <label>
+            Subdomain
+            <div className="subdomain-input">
+              <input
+                value={subdomain}
+                onChange={(e) => {
+                  setSubdomainEdited(true);
+                  setSubdomain(e.target.value.toLowerCase());
+                }}
+                pattern={SUBDOMAIN_PATTERN}
+                title={SUBDOMAIN_HINT}
+                spellCheck={false}
+                required
+              />
+              <span>.{baseDomain ?? "…"}</span>
+            </div>
+          </label>
+          <label>
+            Memory (heap)
+            <select value={memoryMb} onChange={(e) => setMemoryMb(Number(e.target.value))}>
+              {memoryOptions.map((mb) => (
+                <option key={mb} value={mb}>
+                  {formatMemory(mb)}
+                  {mb === analysis.memoryMb ? " (from the old server's -Xmx)" : ""}
                 </option>
               ))}
             </select>
           </label>
-          <label>
-            Minecraft version{serverType === "CUSTOM" && " (optional)"}
-            <input
-              value={minecraftVersion}
-              onChange={(e) => setMinecraftVersion(e.target.value.trim())}
-              placeholder="1.20.1"
-              required={serverType !== "CUSTOM"}
-            />
-          </label>
-          {loaderField && (
+
+          <div className="form-row">
             <label>
-              {loaderField.label}
-              {loaderField.optional && " (optional)"}
+              Platform
+              <select value={serverType} onChange={(e) => setServerType(e.target.value as ServerType)}>
+                {Object.entries(SERVER_TYPE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Minecraft version{serverType === "CUSTOM" && " (optional)"}
               <input
-                value={loaderVersion}
-                onChange={(e) => setLoaderVersion(e.target.value.trim())}
-                placeholder={loaderField.optional ? "latest" : ""}
-                required={!loaderField.optional}
+                value={minecraftVersion}
+                onChange={(e) => setMinecraftVersion(e.target.value.trim())}
+                placeholder="1.20.1"
+                required={serverType !== "CUSTOM"}
               />
             </label>
-          )}
-        </div>
+            {loaderField && (
+              <label>
+                {loaderField.label}
+                {loaderField.optional && " (optional)"}
+                <input
+                  value={loaderVersion}
+                  onChange={(e) => setLoaderVersion(e.target.value.trim())}
+                  placeholder={loaderField.optional ? "latest" : ""}
+                  required={!loaderField.optional}
+                />
+              </label>
+            )}
+          </div>
 
-        {serverType === "CUSTOM" && (
+          {serverType === "CUSTOM" && (
+            <label>
+              Server jar
+              <select value={customJar} onChange={(e) => setCustomJar(e.target.value)} required>
+                {analysis.jars.length === 0 && <option value="">No jars found in the server directory</option>}
+                {analysis.jars.map((jar) => (
+                  <option key={jar} value={jar}>
+                    {jar}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           <label>
-            Server jar
-            <select value={customJar} onChange={(e) => setCustomJar(e.target.value)} required>
-              {analysis.jars.length === 0 && <option value="">No jars found in the server directory</option>}
-              {analysis.jars.map((jar) => (
-                <option key={jar} value={jar}>
-                  {jar}
+            Java version
+            <select
+              value={javaVersion ?? ""}
+              onChange={(e) => setJavaVersion(e.target.value ? Number(e.target.value) : null)}
+            >
+              <option value="">Automatic (from the Minecraft version)</option>
+              {analysis.javaVersions.map((v) => (
+                <option key={v} value={v}>
+                  Java {v}
                 </option>
               ))}
             </select>
           </label>
-        )}
+          <p className="muted">
+            The container installs the {SERVER_TYPE_LABELS[serverType]} version above itself on first boot, next to the
+            copied mods, configs and world; the old machine's start scripts aren't used. The port and bind address in{" "}
+            <code>server.properties</code> are reset so the server is reachable through the shared port 25565.
+          </p>
+        </fieldset>
 
-        <label>
-          Java version
-          <select
-            value={javaVersion ?? ""}
-            onChange={(e) => setJavaVersion(e.target.value ? Number(e.target.value) : null)}
-          >
-            <option value="">Automatic (from the Minecraft version)</option>
-            {analysis.javaVersions.map((v) => (
-              <option key={v} value={v}>
-                Java {v}
-              </option>
-            ))}
-          </select>
-        </label>
-        <p className="muted">
-          The container installs the {SERVER_TYPE_LABELS[serverType]} version above itself on first boot, next to the
-          copied mods, configs and world; the old machine's start scripts aren't used. The port and bind address in{" "}
-          <code>server.properties</code> are reset so the server is reachable through the shared port 25565.
-        </p>
-
-        {(deploy.isError || job.error) && (
-          <p className="error-text">{deploy.isError ? errorMessage(deploy.error, "Deploy failed.") : job.error}</p>
+        {deploying && (
+          <div className="callout info">
+            <span className="spinner" aria-hidden="true" />
+            <p>
+              Copying the server into its new container, then starting it. This runs on the server — you can leave this
+              page; the server shows up on the dashboard once it's created.
+            </p>
+          </div>
         )}
+        {error && <p className="error-text">{error}</p>}
         <div className="form-actions">
-          <button type="submit" disabled={deploy.isPending || job.state === "deploying"}>
-            {deploy.isPending || job.state === "deploying" ? "Deploying (copying files)…" : "Deploy"}
+          <button type="submit" disabled={deploy.isPending || deploying}>
+            {deploy.isPending || deploying ? "Deploying (copying files)…" : "Deploy"}
           </button>
-          <button type="button" className="secondary" onClick={onCancel} disabled={deploy.isPending}>
+          <button type="button" className="secondary" onClick={onCancel} disabled={deploy.isPending || deploying}>
             Discard import
           </button>
         </div>

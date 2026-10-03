@@ -4,6 +4,7 @@ import { instancesApi } from "../api/instances";
 import { InstanceCard } from "../components/InstanceCard";
 import { Layout } from "../components/Layout";
 import { PageHeader } from "../components/PageHeader";
+import { ImportsList } from "../components/ImportsList";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useBaseDomain } from "../hooks/useBaseDomain";
 
@@ -78,6 +79,8 @@ export function DashboardPage() {
           {isSuperadmin && <div className="form-actions">{actions}</div>}
         </div>
       )}
+
+      {isSuperadmin && <ImportsList title="Imports" />}
 
       <div className="instance-grid">
         {instances?.map((instance) => (

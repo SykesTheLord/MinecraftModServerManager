@@ -209,7 +209,11 @@ export async function installCurseForgeInstance(
     let instance = instanceRepo.findById(instanceId)!;
     const pack = await getCfModpack(instance.cf_mod_id!);
     await ensureImagePulled(instance.image);
-    await docker.createVolume({ Name: instance.volume_name });
+    await docker.createVolume({
+      Name: instance.volume_name,
+      // Lets scripts/cleanup.sh find every server's volume (older ones only match by name).
+      Labels: { "mcmgr.managed": "true", "mcmgr.instanceId": instance.id },
+    });
 
     const result = await runInstallContainer(instance, pack.slug);
     if (!instanceRepo.findById(instanceId)) return; // deleted meanwhile

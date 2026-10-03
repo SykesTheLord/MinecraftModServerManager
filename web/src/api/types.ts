@@ -185,9 +185,13 @@ export interface ImportJob {
   id: string;
   source: "upload" | "ssh";
   label: string;
-  state: "receiving" | "processing" | "ready" | "deploying" | "failed";
+  state: "receiving" | "processing" | "ready" | "deploying" | "deployed" | "failed";
   receivedBytes: number;
   expectedBytes: number | null;
   error: string | null;
   analysis: ImportAnalysis | null;
+  /** The server a deployed import became. */
+  instanceId: string | null;
+  /** Unix milliseconds. */
+  createdAt: number;
 }

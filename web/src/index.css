@@ -1662,6 +1662,19 @@ form.console-input input {
   font-size: 0.85rem;
 }
 
+.plain-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.import-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .progress-row {
   display: flex;
   flex-direction: column;

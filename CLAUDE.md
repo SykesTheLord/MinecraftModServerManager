@@ -48,6 +48,8 @@ sudo ./scripts/install.sh   # one-time: installs Docker Engine + Compose plugin
 ./scripts/apply.sh          # docker compose up -d --build; safe to re-run anytime
 ./scripts/update.sh         # git-based self-update: DB backup → fast-forward → apply → health check
                              # (--check, --ref <tag>, --rollback backups/<ts>)
+./scripts/cleanup.sh        # wipe everything except .env (servers, worlds, DB, logs, routes);
+                             # --dry-run lists it first; asks to type "wipe" unless --yes
 ```
 
 or by hand:
@@ -124,6 +126,11 @@ boot), analyzed (`analyze.ts` detects Forge/NeoForge/Fabric/Quilt/Paper/
 vanilla/custom jar, MC + loader version, `-Xmx`, `level-name`), reviewed in
 the UI, then deployed by `instanceService.createImportedInstance`, which
 `putArchive`s them into the new volume (as uid 1000) before first start.
+Everything after the upload runs in the background (`importJobs.startDeploy`
+returns at once; a `deployed` job keeps the new `instanceId` for an hour), and
+`GET /api/imports` lists jobs, so the UI (`/instances/import/:jobId`,
+`ImportsList` on the dashboard) can pick one up again. Browser uploads run in
+`web/src/lib/uploads.ts`, outside any page, so they survive in-app navigation.
 Imported rows have `source = 'import'` and their itzg env (`TYPE`,
 `VERSION`, `FORGE_VERSION`, …) as JSON in `server_env`; `buildContainerConfig`
 branches on that instead of emitting `TYPE=FTBA`. Extraction only writes

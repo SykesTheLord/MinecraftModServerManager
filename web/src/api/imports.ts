@@ -1,5 +1,5 @@
 import { api, ApiError } from "./client";
-import type { Instance, ImportJob, ServerType } from "./types";
+import type { ImportJob, ServerType } from "./types";
 
 export interface SshPullInput {
   host: string;
@@ -43,16 +43,20 @@ async function putChunk(id: string, offset: number, chunk: Blob): Promise<Import
 }
 
 export const importsApi = {
+  list: () => api.get<ImportJob[]>("/imports"),
   get: (id: string) => api.get<ImportJob>(`/imports/${id}`),
   cancel: (id: string) => api.delete<void>(`/imports/${id}`),
   hostKey: (host: string, port: number) =>
     api.post<{ fingerprint: string; keyType: string }>("/imports/ssh/host-key", { host, port }),
   startSsh: (input: SshPullInput) => api.post<ImportJob>("/imports/ssh", input),
-  deploy: (id: string, input: DeployImportInput) => api.post<Instance>(`/imports/${id}/deploy`, input),
+  /** Starts the deploy on the server and returns at once; poll the job for the outcome. */
+  deploy: (id: string, input: DeployImportInput) => api.post<ImportJob>(`/imports/${id}/deploy`, input),
 
-  /** Uploads an archive in order, chunk by chunk, retrying failed chunks from where the server says it is. */
-  async upload(file: File, onProgress: (sentBytes: number) => void, signal: AbortSignal): Promise<ImportJob> {
-    let job = await api.post<ImportJob>("/imports/upload", { fileName: file.name, sizeBytes: file.size });
+  /** Creates the import job an archive upload goes into. */
+  startUpload: (file: File) => api.post<ImportJob>("/imports/upload", { fileName: file.name, sizeBytes: file.size }),
+
+  /** Sends an archive in order, chunk by chunk, retrying failed chunks from where the server says it is. */
+  async sendUpload(job: ImportJob, file: File, signal: AbortSignal): Promise<ImportJob> {
     let failures = 0;
     while (job.receivedBytes < file.size) {
       if (signal.aborted) throw new ApiError(0, "Upload cancelled.");
@@ -67,7 +71,6 @@ export const importsApi = {
         await new Promise((resolve) => setTimeout(resolve, 1000 * failures));
         job = await importsApi.get(job.id); // resync the offset
       }
-      onProgress(job.receivedBytes);
     }
     return api.post<ImportJob>(`/imports/${job.id}/upload/complete`);
   },

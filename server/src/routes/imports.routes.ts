@@ -2,12 +2,11 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, requireSuperadmin } from "../auth/middleware.js";
 import { HttpError, routeParam } from "../http/errors.js";
-import { instanceService } from "../instances/instanceService.js";
+import { assertSubdomainAvailable, instanceService } from "../instances/instanceService.js";
 import { SERVER_TYPES } from "../imports/analyze.js";
 import { KNOWN_JAVA_VERSIONS } from "../docker/javaImage.js";
 import { importJobs } from "../imports/importJobs.js";
 import { fetchHostKey } from "../imports/sshSource.js";
-import { serializeInstance } from "./instances.routes.js";
 
 /**
  * Importing an existing (natively run) server — see imports/importJobs.ts for
@@ -75,6 +74,10 @@ importsRouter.post("/ssh", (req, res) => {
   res.status(201).json(importJobs.startSshPull(parse(sshPullSchema, req.body)));
 });
 
+importsRouter.get("/", (_req, res) => {
+  res.json(importJobs.list());
+});
+
 importsRouter.get("/:id", (req, res) => {
   res.json(importJobs.get(routeParam(req, "id")));
 });
@@ -107,10 +110,13 @@ const deploySchema = z.object({
     .nullable(),
 });
 
-importsRouter.post("/:id/deploy", async (req, res) => {
+// Runs in the background (copying a large server into its volume takes a while); poll the job for the outcome.
+importsRouter.post("/:id/deploy", (req, res) => {
   const input = parse(deploySchema, req.body);
-  const instance = await importJobs.deploy(routeParam(req, "id"), (root, analysis) =>
+  // Cheap checks up front, so a taken subdomain is reported right away rather than through the job.
+  assertSubdomainAvailable(input.subdomain);
+  const job = importJobs.startDeploy(routeParam(req, "id"), (root, analysis) =>
     instanceService.createImportedInstance(input, root, analysis)
   );
-  res.status(201).json(serializeInstance(instance, req.user!));
+  res.status(202).json(job);
 });

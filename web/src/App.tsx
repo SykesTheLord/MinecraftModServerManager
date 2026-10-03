@@ -42,6 +42,16 @@ export function App() {
           }
         />
         <Route
+          path="/instances/import/:jobId"
+          element={
+            <RequireAuth>
+              <RequireSuperadmin>
+                <ImportServerPage />
+              </RequireSuperadmin>
+            </RequireAuth>
+          }
+        />
+        <Route
           path="/instances/:id"
           element={
             <RequireAuth>

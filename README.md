@@ -103,6 +103,18 @@ pack updates, managing access, logs and backups — are in
 ./scripts/update.sh --rollback backups/<timestamp>   # undo
 ```
 
+## Starting over
+
+```bash
+./scripts/cleanup.sh --dry-run   # list what would be deleted
+./scripts/cleanup.sh             # wipe everything except .env (asks you to type "wipe")
+./scripts/apply.sh               # then start fresh
+```
+
+This permanently deletes every server and its world, the manager's
+database, logs and routes. Only `.env`, the code and downloaded images are
+kept.
+
 ## Configuration
 
 All settings live in `.env` (see [`.env.example`](.env.example) for the

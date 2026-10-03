@@ -19,10 +19,17 @@ import { pullOverSsh, type SshPullOptions } from "./sshSource.js";
  * sessions: a manager restart drops them and the staging area is wiped on
  * boot, so an interrupted import is simply started again.
  *
- *   receiving → processing → ready → deploying → (instance created; job removed)
- *        └───────────┴──────────┴─────→ failed
+ * Everything after the upload itself runs in the background on the server —
+ * the SSH copy, unpacking and analysis, and the deploy (copying the files
+ * into the new server's volume can take a long time) — so the admin can
+ * leave the page and come back; `list()` is how the UI finds jobs again.
+ * A deployed job is kept for a while, with the new instance's id, so a page
+ * that comes back later can still see where the import went.
+ *
+ *   receiving → processing → ready → deploying → deployed (files removed; job dropped after an hour)
+ *        └───────────┴──────────┴──────────┴──→ failed      (a failed deploy goes back to ready)
  */
-export type ImportState = "receiving" | "processing" | "ready" | "deploying" | "failed";
+export type ImportState = "receiving" | "processing" | "ready" | "deploying" | "deployed" | "failed";
 
 interface ImportJob {
   id: string;
@@ -37,6 +44,9 @@ interface ImportJob {
   analysis: ImportAnalysis | null;
   /** The server's directory inside the staging area, once found. */
   root: string | null;
+  /** The instance a deployed import became. */
+  instanceId: string | null;
+  createdAt: number;
   writingChunk: boolean;
   abort: AbortController;
   updatedAt: number;
@@ -44,12 +54,13 @@ interface ImportJob {
 
 export type ImportJobView = Pick<
   ImportJob,
-  "id" | "source" | "label" | "state" | "receivedBytes" | "expectedBytes" | "error" | "analysis"
+  "id" | "source" | "label" | "state" | "receivedBytes" | "expectedBytes" | "error" | "analysis" | "instanceId" | "createdAt"
 >;
 
 const IMPORTS_DIR = path.join(env.DATA_DIR, "imports");
 const MAX_CHUNK_BYTES = 64 * 1024 * 1024;
 const ABANDONED_AFTER_MS = 24 * 60 * 60 * 1000;
+const DEPLOYED_KEPT_MS = 60 * 60 * 1000;
 
 const jobs = new Map<string, ImportJob>();
 
@@ -58,8 +69,8 @@ const archivePath = (id: string) => path.join(jobDir(id), "upload.archive");
 const filesDir = (id: string) => path.join(jobDir(id), "files");
 
 function view(job: ImportJob): ImportJobView {
-  const { id, source, label, state, receivedBytes, expectedBytes, error, analysis } = job;
-  return { id, source, label, state, receivedBytes, expectedBytes, error, analysis };
+  const { id, source, label, state, receivedBytes, expectedBytes, error, analysis, instanceId, createdAt } = job;
+  return { id, source, label, state, receivedBytes, expectedBytes, error, analysis, instanceId, createdAt };
 }
 
 function requireJob(id: string): ImportJob {
@@ -79,6 +90,8 @@ function newJob(source: ImportJob["source"], label: string, expectedBytes: numbe
     error: null,
     analysis: null,
     root: null,
+    instanceId: null,
+    createdAt: Date.now(),
     writingChunk: false,
     abort: new AbortController(),
     updatedAt: Date.now(),
@@ -133,6 +146,11 @@ async function finalize(job: ImportJob, extraExcludes: string[] = [], warning: s
 export const importJobs = {
   get(id: string): ImportJobView {
     return view(requireJob(id));
+  },
+
+  /** Every import the manager knows about, newest first — so a page left mid-import can be found again. */
+  list(): ImportJobView[] {
+    return [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt).map(view);
   },
 
   startUpload(fileName: string, sizeBytes: number): ImportJobView {
@@ -218,26 +236,34 @@ export const importJobs = {
   },
 
   /**
-   * Hands a ready import's staged server directory to `deploy` (which copies
-   * it into a new instance). The job is removed once that succeeds; if it
-   * fails the files stay staged so the admin can adjust settings and retry.
+   * Starts handing a ready import's staged server directory to `deploy`
+   * (which copies it into a new instance) in the background, and returns at
+   * once. On success the staged files are removed and the job records the new
+   * instance; if it fails the files stay staged and the job goes back to
+   * `ready` with the error, so the admin can adjust settings and retry.
    */
-  async deploy<T>(id: string, deploy: (root: string, analysis: ImportAnalysis) => Promise<T>): Promise<T> {
+  startDeploy(id: string, deploy: (root: string, analysis: ImportAnalysis) => Promise<{ id: string }>): ImportJobView {
     const job = requireJob(id);
     if (job.state !== "ready" || !job.root || !job.analysis) throw new HttpError(409, "This import isn't ready to deploy.");
     job.state = "deploying";
     job.error = null;
-    try {
-      const result = await deploy(job.root, job.analysis);
-      jobs.delete(id);
-      fs.rmSync(jobDir(id), { recursive: true, force: true });
-      return result;
-    } catch (err) {
-      job.state = "ready";
-      job.error = err instanceof HttpError ? err.message : "Deploy failed.";
-      job.updatedAt = Date.now();
-      throw err;
-    }
+    job.updatedAt = Date.now();
+    deploy(job.root, job.analysis).then(
+      (instance) => {
+        job.state = "deployed";
+        job.instanceId = instance.id;
+        job.updatedAt = Date.now();
+        fs.rmSync(jobDir(id), { recursive: true, force: true });
+        appLogger.info({ importId: id, instanceId: instance.id }, "import deployed");
+      },
+      (err: unknown) => {
+        job.state = "ready";
+        job.error = err instanceof HttpError ? err.message : "Deploy failed — see the manager's log for details.";
+        job.updatedAt = Date.now();
+        appLogger.error({ err, importId: id }, "import deploy failed");
+      }
+    );
+    return view(job);
   },
 
   remove(id: string): void {
@@ -246,6 +272,7 @@ export const importJobs = {
     job.abort.abort();
     jobs.delete(id);
     // Work still running in the background cleans up once it notices the abort.
+    // (A deployed job's files are already gone; removing it just dismisses it.)
     const backgroundWorkRunning = job.state === "processing" || (job.source === "ssh" && job.state === "receiving");
     if (!backgroundWorkRunning) fs.rmSync(jobDir(id), { recursive: true, force: true });
   },
@@ -257,11 +284,12 @@ export function clearImportStaging(): void {
   fs.mkdirSync(IMPORTS_DIR, { recursive: true });
 }
 
-/** Drops imports nobody has touched in a day — staged servers can be many GB. */
+/** Drops imports nobody has touched in a day — staged servers can be many GB — and deployed ones after an hour. */
 export function startAbandonedImportSweep(): void {
   setInterval(() => {
     for (const job of jobs.values()) {
-      if (job.state === "deploying" || Date.now() - job.updatedAt < ABANDONED_AFTER_MS) continue;
+      const keepFor = job.state === "deployed" ? DEPLOYED_KEPT_MS : ABANDONED_AFTER_MS;
+      if (job.state === "deploying" || Date.now() - job.updatedAt < keepFor) continue;
       appLogger.info({ importId: job.id }, "removing abandoned import");
       importJobs.remove(job.id);
     }

@@ -133,6 +133,17 @@ grants, start/stop).
 **Stop the server on the old machine first.** Copying a running server can
 capture its world mid-save.
 
+**Imports run in the background.** Each import has its own page
+(`/instances/import/<id>`), and both the import page and the dashboard list
+imports in progress or waiting for review. The parts that run on the
+manager keep going if you leave the page or close the browser: the SSH
+copy, unpacking and analysis, and the final deploy, which copies the files
+into the new server. An archive upload is sent by your browser, so it
+continues while you use the rest of the app, but only as long as that tab
+stays open. The browser asks before you close it mid-upload. Imports that
+nobody touches for a day are dropped, as is anything in progress when the
+manager restarts.
+
 Two ways to get the files over:
 
 - **Copy from another machine (SSH)** — the manager connects to the old
@@ -268,6 +279,27 @@ Modpack servers keep running throughout. Everyone is logged out (sessions
 live in memory), and an import that was in progress has to be started again.
 **Settings → About** shows the running version and the commit it was built
 from.
+
+## Starting over (wiping an installation)
+
+```bash
+./scripts/cleanup.sh --dry-run   # list exactly what would be deleted
+./scripts/cleanup.sh             # wipe it (asks you to type "wipe"; --yes skips that)
+./scripts/apply.sh               # start again from scratch
+```
+
+`cleanup.sh` resets the installation to a fresh state and keeps only
+`.env`, the code, and downloaded Docker images. It **permanently deletes**:
+
+- every modpack server, including its world, configs and the world backups
+  kept with it;
+- the manager's database: users, servers and settings;
+- `logs/`, the routing configs, and the database backups `update.sh` made in
+  `backups/`.
+
+Nothing is backed up first, so copy out any world you want to keep. On the
+next start the admin account is created again from `ADMIN_USERNAME` /
+`ADMIN_PASSWORD` in `.env`.
 
 ## Managing access
 

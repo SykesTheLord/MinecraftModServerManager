@@ -60,7 +60,7 @@ export function validateSubdomain(subdomain: string): void {
   }
 }
 
-function assertSubdomainAvailable(subdomain: string): void {
+export function assertSubdomainAvailable(subdomain: string): void {
   validateSubdomain(subdomain);
   if (instanceRepo.findBySubdomain(subdomain)) {
     throw new HttpError(409, `Subdomain "${subdomain}" is already in use.`);
@@ -76,7 +76,11 @@ export async function provisionInstance(id: string, beforeStart?: (container: Do
   const instance = instanceRepo.findById(id)!;
   try {
     await ensureImagePulled(instance.image);
-    await docker.createVolume({ Name: instance.volume_name });
+    await docker.createVolume({
+      Name: instance.volume_name,
+      // Lets scripts/cleanup.sh find every server's volume (older ones only match by name).
+      Labels: { "mcmgr.managed": "true", "mcmgr.instanceId": instance.id },
+    });
 
     const container = await docker.createContainer(buildContainerConfig(instance));
     instanceRepo.setContainerId(id, container.id);
