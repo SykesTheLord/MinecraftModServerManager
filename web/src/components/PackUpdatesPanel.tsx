@@ -59,7 +59,7 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
     onSuccess: (fresh) => queryClient.setQueryData(["versions", instance.id], fresh),
   });
   const current = versions?.find((v) => v.current);
-  const busy = instance.updating || instance.status === "creating" || apply.isPending;
+  const busy = instance.updating || instance.status === "creating" || instance.status === "stopping" || apply.isPending;
   const result = instance.update_result;
 
   return (
@@ -109,7 +109,11 @@ export function PackUpdatesPanel({ instance }: { instance: Instance }) {
       {busy && (
         <div className="callout info">
           <span className="spinner" aria-hidden="true" />
-          <p>Updating — the server is backed up, then reinstalled with the new version. Watch the status above.</p>
+          <p>
+            {instance.status === "stopping"
+              ? "The server is stopping (saving its world first). This is available again once it has stopped."
+              : "Updating — the server is backed up, then reinstalled with the new version. Watch the status above."}
+          </p>
         </div>
       )}
       {result && !busy && (

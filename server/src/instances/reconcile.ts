@@ -4,6 +4,7 @@ import { startPersistingInstanceLogs } from "../logging/instanceLogWriter.js";
 import { removeInstanceRoute, writeInstanceRoute } from "../infrared/configWriter.js";
 import { startHealthPolling } from "./healthPoller.js";
 import { appLogger } from "../logging/appLogger.js";
+import { STOP_TIMEOUT_SECONDS } from "../docker/containerSpec.js";
 
 /**
  * Docker is the source of truth for real container state; the DB is a
@@ -39,6 +40,19 @@ export async function reconcileInstancesOnBoot(): Promise<void> {
       running = false; // container no longer exists
     }
 
+    if (running && instance.status === "stopping") {
+      // The manager restarted in the middle of a stop: finish it rather than treat the container as
+      // started outside the manager. It's left out of routing and health polling meanwhile.
+      removeInstanceRoute(instance.id);
+      appLogger.warn({ instanceId: instance.id }, "finishing a stop interrupted by a manager restart");
+      void docker
+        .getContainer(instance.container_id)
+        .stop({ t: STOP_TIMEOUT_SECONDS })
+        .catch(() => undefined)
+        .then(() => instanceRepo.setStatusIf(instance.id, "stopping", "stopped"));
+      continue;
+    }
+
     if (running) {
       if (instance.status !== "running" && instance.status !== "installing") {
         // Started outside the manager, or relaunched by Docker's restart
@@ -54,7 +68,7 @@ export async function reconcileInstancesOnBoot(): Promise<void> {
     }
 
     removeInstanceRoute(instance.id);
-    if (instance.status === "running" || instance.status === "installing" || instance.status === "creating") {
+    if (["running", "installing", "creating", "stopping"].includes(instance.status)) {
       instanceRepo.updateStatus(instance.id, "stopped");
       appLogger.warn({ instanceId: instance.id }, "reconciled stale status to stopped on boot");
     }

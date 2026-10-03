@@ -28,9 +28,19 @@ const timers = new Map<string, NodeJS.Timeout>();
 // during the current boot attempt count.
 const restartBaselines = new Map<string, number>();
 
+// Each startHealthPolling begins a new generation; stopping ends it. A poll
+// only acts (writes a status, schedules the next poll) while its generation
+// is current, so one already in flight when the server is stopped — e.g.
+// mid-inspect as the container exits — can't mistake that stop for a crash
+// and mark the server errored after the stop marked it stopped.
+const generations = new Map<string, number>();
+let lastGeneration = 0;
+
 export function startHealthPolling(instanceId: string): void {
   stopHealthPolling(instanceId);
-  scheduleNext(instanceId, FAST_POLL_MS);
+  const generation = ++lastGeneration;
+  generations.set(instanceId, generation);
+  scheduleNext(instanceId, generation, FAST_POLL_MS);
 }
 
 export function stopHealthPolling(instanceId: string): void {
@@ -39,11 +49,13 @@ export function stopHealthPolling(instanceId: string): void {
     clearTimeout(timer);
     timers.delete(instanceId);
   }
+  generations.delete(instanceId);
   restartBaselines.delete(instanceId);
 }
 
-function scheduleNext(instanceId: string, delayMs: number): void {
-  const timer = setTimeout(() => void poll(instanceId), delayMs);
+function scheduleNext(instanceId: string, generation: number, delayMs: number): void {
+  if (generations.get(instanceId) !== generation) return;
+  const timer = setTimeout(() => void poll(instanceId, generation), delayMs);
   timers.set(instanceId, timer);
 }
 
@@ -64,12 +76,27 @@ async function isServerReady(containerId: string, containerName: string, rconPas
   );
 }
 
-/** Gives up on an instance: surfaces the error and stops everything that assumed it was up. */
-function giveUp(instanceId: string, lastError: string): void {
-  instanceRepo.updateStatus(instanceId, "error", lastError);
+/** Stops tracking an instance whose container is down for good, recording why (`error`, or a clean `stopped`). */
+function settle(instanceId: string, status: "error" | "stopped", lastError: string | null): void {
+  instanceRepo.updateStatus(instanceId, status, lastError);
+  generations.delete(instanceId);
   restartBaselines.delete(instanceId);
   stopPersistingInstanceLogs(instanceId);
   removeInstanceRoute(instanceId);
+}
+
+/** Gives up on an instance: surfaces the error and stops everything that assumed it was up. */
+function giveUp(instanceId: string, lastError: string): void {
+  settle(instanceId, "error", lastError);
+}
+
+/**
+ * Exit codes of a server that shut down cleanly: 0 (it saved and exited — the
+ * usual result of `docker stop`, which itzg's runner turns into a graceful
+ * "stop") or 143 (128 + SIGTERM). Anything else, or being OOM-killed, is a crash.
+ */
+function exitedCleanly(state: { ExitCode: number; OOMKilled: boolean }): boolean {
+  return !state.OOMKilled && (state.ExitCode === 0 || state.ExitCode === 143);
 }
 
 async function logTail(containerId: string): Promise<string> {
@@ -77,14 +104,17 @@ async function logTail(containerId: string): Promise<string> {
   return tail.slice(-4000);
 }
 
-async function poll(instanceId: string): Promise<void> {
+async function poll(instanceId: string, generation: number): Promise<void> {
   timers.delete(instanceId);
+  // Re-checked after every await: stopped (or restarted) meanwhile means this poll's view is stale.
+  const current = () => generations.get(instanceId) === generation;
   const instance = instanceRepo.findById(instanceId);
-  if (!instance || !instance.container_id) return; // deleted or never started — stop implicitly
+  if (!current() || !instance || !instance.container_id) return; // deleted or never started — stop implicitly
   if (instance.status !== "installing" && instance.status !== "running") return; // stopped/errored elsewhere
 
   try {
     const info = await docker.getContainer(instance.container_id).inspect();
+    if (!current()) return;
     // First poll since (re)starting to track this instance: a manual start
     // resets RestartCount, so for `installing` every restart counts; for an
     // already-`running` instance (resumed after a manager restart) only
@@ -95,7 +125,9 @@ async function poll(instanceId: string): Promise<void> {
     const restartsThisBoot = info.RestartCount - baseline;
 
     if (instance.status === "installing" && restartsThisBoot >= CRASH_LOOP_RESTART_THRESHOLD) {
-      giveUp(instanceId, await logTail(instance.container_id));
+      const tail = await logTail(instance.container_id);
+      if (!current()) return;
+      giveUp(instanceId, tail);
       appLogger.error({ instanceId, restartCount: info.RestartCount }, "instance crash-looping on boot");
       // Stop it explicitly — `unless-stopped` would otherwise keep relaunching
       // it forever even though we've already given up and surfaced an error.
@@ -108,16 +140,17 @@ async function poll(instanceId: string): Promise<void> {
 
     if (info.State.Running) {
       let status = instance.status;
-      if (
+      const ready =
         status === "installing" &&
-        (await isServerReady(instance.container_id, instance.container_name, instance.rcon_password, info.State.StartedAt))
-      ) {
+        (await isServerReady(instance.container_id, instance.container_name, instance.rcon_password, info.State.StartedAt));
+      if (!current()) return;
+      if (ready) {
         status = "running";
         instanceRepo.updateStatus(instanceId, status);
         restartBaselines.set(instanceId, info.RestartCount);
         appLogger.info({ instanceId }, "instance promoted to running");
       }
-      scheduleNext(instanceId, status === "running" ? SLOW_POLL_MS : FAST_POLL_MS);
+      scheduleNext(instanceId, generation, status === "running" ? SLOW_POLL_MS : FAST_POLL_MS);
       return;
     }
 
@@ -129,20 +162,28 @@ async function poll(instanceId: string): Promise<void> {
         instanceRepo.updateStatus(instanceId, "installing");
         appLogger.warn({ instanceId, exitCode: info.State.ExitCode }, "instance crashed; docker is restarting it");
       }
-      scheduleNext(instanceId, FAST_POLL_MS);
+      scheduleNext(instanceId, generation, FAST_POLL_MS);
       return;
     }
 
-    // Exited and Docker isn't bringing it back (e.g. stopped outside the manager).
-    giveUp(instanceId, await logTail(instance.container_id));
+    // Exited and Docker isn't bringing it back: stopped outside the manager (e.g. `docker stop`), or a crash.
+    if (exitedCleanly(info.State)) {
+      settle(instanceId, "stopped", null);
+      appLogger.info({ instanceId, exitCode: info.State.ExitCode }, "instance was stopped outside the manager");
+      return;
+    }
+    const tail = await logTail(instance.container_id);
+    if (!current()) return;
+    giveUp(instanceId, tail);
     appLogger.error({ instanceId, exitCode: info.State.ExitCode }, "instance container exited unexpectedly");
   } catch (err) {
+    if (!current()) return;
     if ((err as { statusCode?: number })?.statusCode === 404) {
       giveUp(instanceId, "The instance's container no longer exists.");
       appLogger.error({ instanceId }, "instance container disappeared");
       return;
     }
     appLogger.error({ err, instanceId }, "health poll failed");
-    scheduleNext(instanceId, SLOW_POLL_MS);
+    scheduleNext(instanceId, generation, SLOW_POLL_MS);
   }
 }

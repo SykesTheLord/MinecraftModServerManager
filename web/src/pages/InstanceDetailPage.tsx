@@ -79,6 +79,7 @@ export function InstanceDetailPage() {
   const canOperate = instance.effectiveRole === "admin" || instance.effectiveRole === "operator";
   const canAdmin = instance.effectiveRole === "admin";
   const isRunning = instance.status === "running" || instance.status === "installing";
+  const isStopping = instance.status === "stopping";
   const hasServer = Boolean(instance.container_id);
   const cfInstallPending = instance.source === "curseforge" && !hasServer;
   const canUpdate = canAdmin && (instance.source === "ftb" || instance.source === "curseforge");
@@ -115,7 +116,11 @@ export function InstanceDetailPage() {
         </div>
         {canOperate && hasServer && (
           <div className="page-header-actions">
-            {isRunning ? (
+            {isStopping ? (
+              <button className="secondary" disabled title="The server is saving and shutting down; this takes up to a minute.">
+                Stopping…
+              </button>
+            ) : isRunning ? (
               <>
                 <button className="secondary" onClick={() => stop.mutate()} disabled={stop.isPending}>
                   Stop

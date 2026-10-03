@@ -6,6 +6,7 @@ export type InstanceStatus =
   | "awaiting_files"
   | "installing"
   | "running"
+  | "stopping"
   | "stopped"
   | "error"
   | "deleting";
@@ -112,6 +113,15 @@ export const instanceRepo = {
     db.prepare(
       "UPDATE instance SET status = ?, last_error = ?, updated_at = ? WHERE id = ?"
     ).run(status, lastError, new Date().toISOString(), id);
+  },
+
+  /** Sets the status only if it's still `expected`; false if something else changed it meanwhile. */
+  setStatusIf(id: string, expected: InstanceStatus, status: InstanceStatus, lastError: string | null = null): boolean {
+    return (
+      db
+        .prepare("UPDATE instance SET status = ?, last_error = ?, updated_at = ? WHERE id = ? AND status = ?")
+        .run(status, lastError, new Date().toISOString(), id, expected).changes > 0
+    );
   },
 
   setContainerId(id: string, containerId: string): void {

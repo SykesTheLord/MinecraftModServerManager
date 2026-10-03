@@ -5,6 +5,7 @@ const LABELS: Record<InstanceStatus, string> = {
   awaiting_files: "Needs files",
   installing: "Starting",
   running: "Running",
+  stopping: "Stopping",
   stopped: "Stopped",
   error: "Error",
   deleting: "Deleting",

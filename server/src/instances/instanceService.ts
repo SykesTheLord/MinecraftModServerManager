@@ -218,6 +218,7 @@ export const instanceService = {
   async startInstance(id: string): Promise<void> {
     const instance = requireInstance(id);
     if (!instance.container_id) throw new HttpError(409, "Instance has no container yet.");
+    if (instance.status === "stopping") throw new HttpError(409, "The server is still stopping — start it again once it has stopped.");
     // The DB can lag behind Docker (e.g. `unless-stopped` relaunched a
     // container the health poller had already marked as errored), so
     // "already started" (304) just means there's nothing to do but resume
@@ -234,18 +235,28 @@ export const instanceService = {
     startHealthPolling(id);
   },
 
+  /**
+   * Stops a server gracefully (it saves first, which can take up to a minute).
+   * `stopping` is recorded before anything awaits — so a caller that doesn't
+   * wait for the stop (the Stop button) still has it saved by the time it
+   * responds — and `stopped` only once the container is down, unless
+   * something else (a delete, update or restore) took the server over meanwhile.
+   */
   async stopInstance(id: string): Promise<void> {
     const instance = requireInstance(id);
+    // Stop watching *before* stopping, or the health poller would record the exit as a crash.
+    stopHealthPolling(id);
+    instanceRepo.updateStatus(id, "stopping");
     if (instance.container_id) {
       await docker
         .getContainer(instance.container_id)
         .stop({ t: STOP_TIMEOUT_SECONDS })
         .catch(() => undefined);
     }
-    stopHealthPolling(id);
+    // Only now: the server kicks its players itself as it shuts down, rather than the proxy dropping them.
     stopPersistingInstanceLogs(id);
     removeInstanceRoute(id);
-    instanceRepo.updateStatus(id, "stopped");
+    instanceRepo.setStatusIf(id, "stopping", "stopped");
   },
 
   async restartInstance(id: string): Promise<void> {

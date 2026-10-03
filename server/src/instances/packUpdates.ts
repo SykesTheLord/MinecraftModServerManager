@@ -202,6 +202,7 @@ async function applyPackUpdateLocked(
   try {
     if (!instance) throw new HttpError(404, "Instance not found.");
     if (!updatable(instance)) throw new HttpError(400, "Only FTB and CurseForge servers can be updated.");
+    if (instance.status === "stopping") throw new HttpError(409, "The server is stopping — try again once it has stopped.");
     if (instance.status === "creating" || isInstallRunning(instanceId)) {
       throw new HttpError(409, "The server is still being installed.");
     }
@@ -304,6 +305,7 @@ export async function restoreBackup(instanceId: string, name: string, switchVers
   await withServerLock(instanceId, async () => {
     const instance = instanceRepo.findById(instanceId);
     if (!instance) throw new HttpError(404, "Instance not found.");
+    if (instance.status === "stopping") throw new HttpError(409, "The server is stopping — try again once it has stopped.");
     if (instance.status === "creating" || isInstallRunning(instanceId)) {
       throw new HttpError(409, "The server is being installed; restore once that's finished.");
     }
@@ -358,8 +360,8 @@ export async function createManualBackup(instanceId: string): Promise<string> {
   return withServerLock(instanceId, async () => {
     const instance = instanceRepo.findById(instanceId);
     if (!instance) throw new HttpError(404, "Instance not found.");
-    if (instance.status === "creating" || instance.status === "installing") {
-      throw new HttpError(409, "The server is starting or installing — back it up once it's running, or stopped.");
+    if (instance.status === "creating" || instance.status === "installing" || instance.status === "stopping") {
+      throw new HttpError(409, "The server is starting, stopping or installing — back it up once it's running, or stopped.");
     }
     const resume = instance.status === "running" && instance.container_id ? await pauseSaving(instance) : null;
     try {

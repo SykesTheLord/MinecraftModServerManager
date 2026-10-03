@@ -113,7 +113,12 @@ silently relaunched by Docker itself, so a plain `State.Running` check can't
 tell a crash-loop from a slow-but-healthy boot — `instances/healthPoller.ts`
 watches Docker's own `RestartCount` field instead and gives up (stops the
 container, marks the instance `error` with the real log tail) once it
-crosses a small threshold.
+crosses a small threshold. Anything that stops a server must call
+`stopHealthPolling` *before* stopping the container (a graceful stop takes
+seconds to a minute); polls are generation-checked so one already in flight
+can't record that stop as a crash, and a container that exits cleanly
+(code 0/143, not OOM-killed) without the manager stopping it is marked
+`stopped`, not `error`.
 
 ### Importing natively run servers
 
@@ -234,7 +239,11 @@ version's actual config format, not assumed.
   `image`, `source` (`ftb`|`import`|`curseforge`) + `server_env` (resolved
   itzg env for non-FTB sources), `cf_mod_id`/`cf_file_id`/`missing_files`
   (CurseForge), `container_id`/`container_name`/`volume_name`, per-instance
-  `rcon_password`, and `status` (`creating|awaiting_files|installing|running|stopped|error|deleting`),
+  `rcon_password`, and `status` (`creating|awaiting_files|installing|running|stopping|stopped|error|deleting`;
+  `stopping` is saved the moment Stop is clicked — the route answers 202 and the
+  graceful shutdown finishes in the background, then `setStatusIf` moves it to
+  `stopped` only if nothing else took over; start/update/restore/backup refuse
+  while stopping, and boot reconcile finishes an interrupted stop),
   plus update tracking (`auto_update`, `pack_version_name`,
   `available_version_*`, `update_checked_at`, `update_result`).
   Changing a CHECK constraint means rebuilding the table (see

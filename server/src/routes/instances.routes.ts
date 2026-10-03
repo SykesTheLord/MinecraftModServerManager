@@ -6,6 +6,7 @@ import { instanceRepo, type InstanceRow } from "../db/repositories/instanceRepo.
 import { instanceService } from "../instances/instanceService.js";
 import type { UserRow } from "../db/repositories/userRepo.js";
 import { HttpError, routeParam } from "../http/errors.js";
+import { appLogger } from "../logging/appLogger.js";
 import { KNOWN_JAVA_VERSIONS } from "../docker/javaImage.js";
 import { readServerProperties, writeServerProperties } from "../instances/serverProperties.js";
 import {
@@ -230,14 +231,14 @@ instancesRouter.post(
   }
 );
 
-instancesRouter.post(
-  "/:id/stop",
-  requireInstanceRole("operator"),
-  async (req, res) => {
-    await instanceService.stopInstance(routeParam(req, "id"));
-    res.json({ ok: true });
-  }
-);
+// Records `stopping` and answers right away; the graceful shutdown (up to a minute) finishes in the
+// background, and the server's status moves to `stopped` when it does.
+instancesRouter.post("/:id/stop", requireInstanceRole("operator"), (req, res) => {
+  const id = routeParam(req, "id");
+  requireRow(id);
+  instanceService.stopInstance(id).catch((err: unknown) => appLogger.error({ err, instanceId: id }, "stop failed"));
+  res.status(202).json({ ok: true });
+});
 
 instancesRouter.post(
   "/:id/restart",

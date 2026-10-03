@@ -45,7 +45,8 @@ export function BackupsPanel({ instance }: { instance: Instance }) {
     },
   });
 
-  const busy = instance.updating || instance.status === "creating" || restore.isPending || backupNow.isPending;
+  const busy =
+    instance.updating || instance.status === "creating" || instance.status === "stopping" || restore.isPending || backupNow.isPending;
   const running = instance.status === "running";
   const versionDiffers = (b: BackupInfo) =>
     Boolean(b.versionId) && b.versionId !== currentVersionId(instance) && instance.source !== "import";
@@ -71,7 +72,11 @@ export function BackupsPanel({ instance }: { instance: Instance }) {
       {busy && !backupNow.isPending && (
         <div className="callout info">
           <span className="spinner" aria-hidden="true" />
-          <p>Working on this server (update, restore or backup) — the list refreshes when it's done.</p>
+          <p>
+            {instance.status === "stopping"
+              ? "The server is stopping (saving its world first). This is available again once it has stopped."
+              : "Working on this server (update, restore or backup) — the list refreshes when it's done."}
+          </p>
         </div>
       )}
       {result && !busy && /^(Restor|Update failed)/.test(result) && (

@@ -20,7 +20,7 @@ export function DashboardPage() {
 
   const count = (pred: (s: string) => boolean) => instances?.filter((i) => pred(i.status)).length ?? 0;
   const running = count((s) => s === "running");
-  const busy = count((s) => s === "creating" || s === "installing");
+  const busy = count((s) => s === "creating" || s === "installing" || s === "stopping");
   const attention = count((s) => s === "error" || s === "awaiting_files");
 
   const actions = isSuperadmin && (
@@ -53,7 +53,7 @@ export function DashboardPage() {
             <div className="stat-value success">{running}</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Starting / installing</div>
+            <div className="stat-label">Starting / stopping</div>
             <div className="stat-value">{busy}</div>
           </div>
           <div className="stat">

@@ -3,6 +3,7 @@ export type InstanceStatus =
   | "awaiting_files"
   | "installing"
   | "running"
+  | "stopping"
   | "stopped"
   | "error"
   | "deleting";

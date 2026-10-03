@@ -762,8 +762,14 @@ progress::-moz-progress-bar {
   color: var(--warning);
 }
 
+.status-stopping {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
 .status-installing::before,
-.status-creating::before {
+.status-creating::before,
+.status-stopping::before {
   animation: pulse 1.4s ease-in-out infinite;
 }
 

@@ -17,6 +17,7 @@ export function InstanceCard({ instance, baseDomain }: { instance: Instance; bas
 
   const canOperate = instance.effectiveRole === "admin" || instance.effectiveRole === "operator";
   const isRunning = instance.status === "running" || instance.status === "installing";
+  const isStopping = instance.status === "stopping";
   const hasServer = Boolean(instance.container_id);
   const actionError = latestMutationError(start, stop, restart);
   const address = baseDomain ? `${instance.subdomain}.${baseDomain}` : instance.subdomain;
@@ -51,7 +52,11 @@ export function InstanceCard({ instance, baseDomain }: { instance: Instance; bas
       <div className="instance-card-actions">
         {canOperate && hasServer && (
           <>
-            {isRunning ? (
+            {isStopping ? (
+              <button className="secondary small" disabled>
+                Stopping…
+              </button>
+            ) : isRunning ? (
               <>
                 <button className="secondary small" onClick={() => stop.mutate()} disabled={stop.isPending}>
                   {stop.isPending ? "Stopping…" : "Stop"}
